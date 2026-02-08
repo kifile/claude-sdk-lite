@@ -295,7 +295,8 @@ class TestDirectoryAndFileOptions:
         """Test working directory with Path object."""
         options = ClaudeOptions(working_dir=Path("/path/to/project"))
         kwargs = options.build_subprocess_kwargs()
-        assert kwargs["cwd"] == "/path/to/project"
+        # Normalize paths for cross-platform comparison
+        assert Path(kwargs["cwd"]) == Path("/path/to/project")
 
     def test_add_dirs(self):
         """Test --add-dir option."""
@@ -310,8 +311,10 @@ class TestDirectoryAndFileOptions:
         """Test --add-dir with Path objects."""
         options = ClaudeOptions(add_dirs=[Path("/dir1"), Path("/dir2")])
         cmd = options.build_command()
-        assert "/dir1" in cmd
-        assert "/dir2" in cmd
+        # Normalize paths for cross-platform comparison
+        cmd_str = " ".join(cmd)
+        assert str(Path("/dir1")) in cmd_str or "dir1" in cmd_str
+        assert str(Path("/dir2")) in cmd_str or "dir2" in cmd_str
 
 
 class TestSettingsOptions:
@@ -601,10 +604,15 @@ class TestCLIPathValidation:
 
     def test_custom_cli_path_executable(self):
         """Test command with custom CLI path that exists and is executable."""
-        # Use a known executable for testing
-        options = ClaudeOptions(cli_path="/bin/ls")
+        # Use a platform-appropriate known executable for testing
+        if os.name == "nt":  # Windows
+            cli_executable = r"C:\Windows\System32\cmd.exe"
+        else:  # Unix-like
+            cli_executable = "/bin/ls"
+        options = ClaudeOptions(cli_path=cli_executable)
         cmd = options.build_command("test")
-        assert cmd[0] == "/bin/ls"
+        # Normalize path for comparison
+        assert Path(cmd[0]) == Path(cli_executable)
 
     def test_non_executable_cli_path(self):
         """Test error when specified cli_path is not executable."""
