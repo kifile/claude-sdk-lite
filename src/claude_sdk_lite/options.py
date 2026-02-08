@@ -501,11 +501,32 @@ class ClaudeOptions(BaseModel):
         # MCP config
         if self.mcp_config:
             if isinstance(self.mcp_config, dict):
-                # Ensure it has mcpServers key
-                if "mcpServers" not in self.mcp_config:
-                    mcp_config = {"mcpServers": self.mcp_config}
+                # Process all servers, stripping instance field from SDK servers
+                servers_for_cli: dict[str, Any] = {}
+                if "mcpServers" in self.mcp_config:
+                    # Has mcpServers key, process each server
+                    for name, config in self.mcp_config["mcpServers"].items():
+                        if isinstance(config, dict) and config.get("type") == "sdk":
+                            # For SDK servers, pass everything except the instance field
+                            sdk_config: dict[str, object] = {
+                                k: v for k, v in config.items() if k != "instance"
+                            }
+                            servers_for_cli[name] = sdk_config
+                        else:
+                            # For external servers, pass as-is
+                            servers_for_cli[name] = config
+                    mcp_config = {"mcpServers": servers_for_cli}
                 else:
-                    mcp_config = self.mcp_config
+                    # No mcpServers key, treat entire dict as servers
+                    for name, config in self.mcp_config.items():
+                        if isinstance(config, dict) and config.get("type") == "sdk":
+                            sdk_config: dict[str, object] = {
+                                k: v for k, v in config.items() if k != "instance"
+                            }
+                            servers_for_cli[name] = sdk_config
+                        else:
+                            servers_for_cli[name] = config
+                    mcp_config = {"mcpServers": servers_for_cli}
                 mcp_json = json.dumps(mcp_config)
             elif isinstance(self.mcp_config, Path):
                 mcp_json = str(self.mcp_config)
