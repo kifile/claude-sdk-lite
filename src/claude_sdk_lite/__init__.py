@@ -33,6 +33,7 @@ Example (async):
 
 __version__ = "0.1.0"
 
+from .client import ClaudeClient
 from .exceptions import (
     ClaudeSDKLiteError,
     CLIExecutionError,
@@ -64,6 +65,8 @@ from .types import (
 __all__ = [
     # Version
     "__version__",
+    # Session client
+    "ClaudeClient",
     # Core functions (sync)
     "query",
     "query_text",

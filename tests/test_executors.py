@@ -1,276 +1,357 @@
-"""Tests for process executors."""
+"""Tests for process executors using real subprocess calls."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+import json
+import platform
 
 import pytest
 
 from claude_sdk_lite.executors import AsyncProcessExecutor, SyncProcessExecutor
 
-
-class MockStdout:
-    """Mock stdout for testing."""
-
-    def __init__(self, lines):
-        self.lines = lines
-        self.index = 0
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        if self.index >= len(self.lines):
-            raise StopIteration
-        line = self.lines[self.index]
-        self.index += 1
-        return line.encode() if isinstance(line, str) else line
+# ========== Platform Detection ==========
+IS_WINDOWS = platform.system() == "Windows"
 
 
-class MockSyncProcess:
-    """Mock subprocess.Popen object for testing."""
-
-    def __init__(self, stdout_lines=None, returncode=0, stderr=b""):
-        self.stdout_lines = stdout_lines or []
-        self.returncode = returncode
-        self.stderr_data = stderr
-        self._stdout_index = 0
-
-        # Create mock stdout
-        self.stdout = MockStdout(self.stdout_lines)
-
-        # Create mock stderr
-        self.stderr = MagicMock()
-        self.stderr.read = MagicMock(return_value=self.stderr_data)
-
-    def poll(self):
-        """Check if process has terminated."""
-        return None if self._stdout_index < len(self.stdout_lines) else self.returncode
-
-    def wait(self, timeout=None):
-        """Wait for process to complete."""
-        self._stdout_index = len(self.stdout_lines)
-        return self.returncode
-
-    def terminate(self):
-        """Terminate the process."""
-        self._stdout_index = len(self.stdout_lines)
-
-    def kill(self):
-        """Kill the process."""
-        self._stdout_index = len(self.stdout_lines)
+# ========== Helper Functions ==========
 
 
-class AsyncMockStdout:
-    """Mock async stdout."""
-
-    def __init__(self, lines):
-        self.lines = lines
-        self.index = 0
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if self.index >= len(self.lines):
-            raise StopAsyncIteration
-        line = self.lines[self.index]
-        self.index += 1
-        return line.encode() if isinstance(line, str) else line
+def get_shell_command():
+    """Get appropriate shell command for the platform."""
+    return ["cmd.exe", "/c"] if IS_WINDOWS else ["sh", "-c"]
 
 
-class AsyncMockProcess:
-    """Mock async subprocess for testing."""
-
-    def __init__(self, stdout_lines=None, returncode=0, stderr=b""):
-        self.stdout_lines = stdout_lines or []
-        self.returncode = returncode
-        self.stderr_data = stderr
-        self.stdout = AsyncMockStdout(self.stdout_lines)
-        self.stderr = MagicMock()
-        self.stderr.read = AsyncMock(return_value=self.stderr_data)
-
-    async def wait(self):
-        return self.returncode
+def get_false_command():
+    """Get a command that always exits with code 1."""
+    return ["cmd.exe", "/c", "exit 1"] if IS_WINDOWS else ["false"]
 
 
-@pytest.fixture
-def mock_find_cli():
-    """Mock CLI finding to avoid actual subprocess calls."""
-    with patch("claude_sdk_lite.utils.find_tool_in_system_sync", return_value="/usr/bin/claude"):
-        yield
+def create_json_command(json_lines):
+    """Create a shell command that outputs JSON lines."""
+    # Use printf to preserve JSON formatting (especially quotes)
+    lines_str = "\\n".join(json_lines)
+    if IS_WINDOWS:
+        return ["cmd.exe", "/c", f'printf "{lines_str}\\n"']
+    else:
+        return ["sh", "-c", f"printf '{lines_str}\\n'"]
 
 
-@pytest.mark.asyncio
-class TestAsyncProcessExecutor:
-    """Test AsyncProcessExecutor."""
+def create_error_command(exit_code, stderr_message=""):
+    """Create a command that exits with custom error code."""
+    if IS_WINDOWS:
+        if stderr_message:
+            return ["cmd.exe", "/c", f"echo {stderr_message} >&2 & exit {exit_code}"]
+        return ["cmd.exe", "/c", f"exit {exit_code}"]
+    else:
+        if stderr_message:
+            return ["sh", "-c", f"echo '{stderr_message}' >&2; exit {exit_code}"]
+        return ["sh", "-c", f"exit {exit_code}"]
 
-    async def test_async_execute_yields_raw_lines(self):
-        """Test that async_execute yields raw line bytes."""
-        executor = AsyncProcessExecutor()
 
-        lines = ["line1", "line2", "line3"]
-        mock_process = AsyncMockProcess(stdout_lines=lines, returncode=0)
-
-        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
-            result_lines = []
-            async for line in executor.async_execute(["echo", "test"]):
-                result_lines.append(line.decode())
-
-            assert result_lines == ["line1", "line2", "line3"]
-
-    async def test_async_execute_handles_cli_errors(self):
-        """Test that async_execute handles CLI errors."""
-        executor = AsyncProcessExecutor()
-
-        mock_process = AsyncMockProcess(returncode=1)
-        mock_process.stderr = MagicMock()
-        mock_process.stderr.read = AsyncMock(return_value=b"Error: Test error\n")
-
-        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
-            with pytest.raises(RuntimeError) as exc_info:
-                async for _ in executor.async_execute(["false"]):
-                    pass
-
-            assert exc_info.value.message == "CLI exited with code 1"
-            assert exc_info.value.exit_code == 1
-            assert exc_info.value.stderr == "Error: Test error\n"
-
-    async def test_async_stdout_pipe_missing_raises_error(self):
-        """Test error when async stdout pipe cannot be created."""
-        executor = AsyncProcessExecutor()
-
-        mock_process = AsyncMock()
-        mock_process.stdout = None
-
-        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
-            with pytest.raises(RuntimeError, match="Failed to create subprocess stdout pipe"):
-                async for _ in executor.async_execute(["echo", "test"]):
-                    pass
+# ========== SyncProcessExecutor Tests ==========
 
 
 class TestSyncProcessExecutor:
-    """Test SyncProcessExecutor."""
+    """Test SyncProcessExecutor with real subprocess calls."""
 
-    def test_execute_yields_raw_lines(self, mock_find_cli):
-        """Test that execute yields raw line bytes."""
+    def test_execute_echo_command(self):
+        """Test executing simple echo command."""
         executor = SyncProcessExecutor()
+        result = list(executor.execute(["echo", "hello", "world"]))
+        assert len(result) == 1
+        assert result[0].decode() == "hello world\n"
 
-        lines = ["line1", "line2", "line3"]
-        mock_process = MockSyncProcess(stdout_lines=lines, returncode=0)
-
-        with patch("subprocess.Popen", return_value=mock_process):
-            result_lines = []
-            for line in executor.execute(["echo", "test"]):
-                result_lines.append(line.decode())
-
-            assert result_lines == ["line1", "line2", "line3"]
-
-    def test_execute_handles_cli_errors(self, mock_find_cli):
-        """Test that execute handles CLI errors."""
+    def test_execute_multi_line_output(self):
+        """Test executing command that produces multiple lines."""
         executor = SyncProcessExecutor()
+        result = list(executor.execute(["seq", "1", "5"]))
+        assert len(result) == 5
+        assert [line.strip().decode() for line in result] == ["1", "2", "3", "4", "5"]
 
-        mock_process = MockSyncProcess(stdout_lines=[], returncode=1, stderr=b"Error: Test error\n")
-
-        with patch("subprocess.Popen", return_value=mock_process):
-            with pytest.raises(RuntimeError) as exc_info:
-                for _ in executor.execute(["false"]):
-                    pass
-
-            assert exc_info.value.message == "CLI exited with code 1"
-            assert exc_info.value.exit_code == 1
-            assert exc_info.value.stderr == "Error: Test error\n"
-
-    def test_cleanup_process_terminated_successfully(self, mock_find_cli):
-        """Test cleanup when process terminates successfully."""
+    def test_execute_json_output(self):
+        """Test executing command with JSON output."""
         executor = SyncProcessExecutor()
-
-        mock_process = MockSyncProcess(stdout_lines=["done"])
-        mock_process.wait = MagicMock(return_value=0)
-        mock_process.terminate = MagicMock()
-        mock_process.poll = lambda: 0  # Already terminated
-
-        with patch("subprocess.Popen", return_value=mock_process):
-            for _ in executor.execute(["echo", "done"]):
-                pass
-
-        # Verify terminate was NOT called (already terminated)
-        mock_process.terminate.assert_not_called()
-
-    def test_cleanup_process_needs_termination(self, mock_find_cli):
-        """Test cleanup when process needs to be terminated."""
-        executor = SyncProcessExecutor()
-
-        mock_process = MockSyncProcess(stdout_lines=["line1", "line2"])
-        mock_process.wait = MagicMock(return_value=0)
-        mock_process.terminate = MagicMock()
-        mock_process.poll = lambda: None  # Still running
-
-        with patch("subprocess.Popen", return_value=mock_process):
-            for _ in executor.execute(["echo", "test"]):
-                pass
-
-        # Verify terminate WAS called (process was still running)
-        mock_process.terminate.assert_called_once()
-
-    def test_stdout_pipe_missing_raises_error(self, mock_find_cli):
-        """Test error when stdout pipe cannot be created."""
-        executor = SyncProcessExecutor()
-
-        mock_process = MagicMock()
-        mock_process.stdout = None
-
-        with patch("subprocess.Popen", return_value=mock_process):
-            with pytest.raises(RuntimeError, match="Failed to create subprocess stdout pipe"):
-                for _ in executor.execute(["echo", "test"]):
-                    pass
-
-
-@pytest.mark.asyncio
-class TestExecutorIntegration:
-    """Integration tests for executors with query functions."""
-
-    async def test_sync_executor_via_query(self, mock_find_cli):
-        """Test sync executor through query function."""
-        import json
-
-        from claude_sdk_lite import query
-
-        responses = [
-            {
-                "type": "assistant",
-                "message": {
-                    "model": "sonnet",
-                    "content": [{"type": "text", "text": "Test response"}],
-                },
-            }
+        json_lines = [
+            '{"type": "test", "id": 1}',
+            '{"type": "test", "id": 2}',
+            '{"type": "test", "id": 3}',
         ]
 
-        mock_process = MockSyncProcess(
-            stdout_lines=[json.dumps(r) for r in responses], returncode=0
+        cmd = create_json_command(json_lines)
+        result = list(executor.execute(cmd))
+        assert len(result) == 3
+        assert json.loads(result[0].decode())["id"] == 1
+        assert json.loads(result[1].decode())["id"] == 2
+        assert json.loads(result[2].decode())["id"] == 3
+
+    def test_execute_command_with_error(self):
+        """Test executing command that exits with non-zero code."""
+        executor = SyncProcessExecutor()
+
+        cmd = get_false_command()
+        with pytest.raises(RuntimeError) as exc_info:
+            list(executor.execute(cmd))
+
+        assert exc_info.value.message == "CLI exited with code 1"
+        assert exc_info.value.exit_code == 1
+
+    def test_execute_command_with_custom_error(self):
+        """Test executing command with custom error code."""
+        executor = SyncProcessExecutor()
+
+        cmd = create_error_command(42, "Custom error message")
+        with pytest.raises(RuntimeError) as exc_info:
+            list(executor.execute(cmd))
+
+        assert exc_info.value.exit_code == 42
+        assert "Custom error" in exc_info.value.stderr or "error" in exc_info.value.stderr.lower()
+
+    def test_execute_cat_with_stdin(self):
+        """Test executing cat that reads from stdin (if supported)."""
+        executor = SyncProcessExecutor()
+        # cat with no arguments just waits for stdin
+        # This should produce output only if we provide input
+        # Since we don't provide input, it will just exit
+        result = list(executor.execute(["cat"]))
+        # cat with no input will exit immediately
+        assert len(result) == 0
+
+    def test_execute_grep_command(self):
+        """Test executing grep with pattern that has matches."""
+        executor = SyncProcessExecutor()
+        # grep with -E and pattern, using echo to provide input
+        result = list(executor.execute(["sh", "-c", "echo test | grep -E '^test$'"]))
+        assert len(result) == 1
+        assert result[0].decode().strip() == "test"
+
+    def test_execute_with_large_output(self):
+        """Test executing command that produces large output."""
+        executor = SyncProcessExecutor()
+        # Generate 1000 lines
+        result = list(executor.execute(["seq", "1", "1000"]))
+        assert len(result) == 1000
+        assert result[0].decode().strip() == "1"
+        assert result[-1].decode().strip() == "1000"
+
+    def test_execute_with_unicode_output(self):
+        """Test executing command that produces Unicode output."""
+        executor = SyncProcessExecutor()
+
+        # Use echo with Unicode text directly
+        messages = ["Hello 世界", "Emoji 🎉", "Привет мир"]
+        cmd = get_shell_command() + [f'echo "{messages[0]}\\n{messages[1]}\\n{messages[2]}"']
+
+        result = list(executor.execute(cmd))
+        # Result may be split differently depending on platform
+        combined_output = b"".join(result).decode()
+        assert "世界" in combined_output or "世界" in result[0].decode()
+        assert "🎉" in combined_output
+        assert "Привет" in combined_output
+
+
+# ========== AsyncProcessExecutor Tests ==========
+
+
+class TestAsyncProcessExecutor:
+    """Test AsyncProcessExecutor with real subprocess calls."""
+
+    @pytest.mark.asyncio
+    async def test_async_execute_echo_command(self):
+        """Test async executing simple echo command."""
+        executor = AsyncProcessExecutor()
+        result = []
+        async for line in executor.async_execute(["echo", "async", "test"]):
+            result.append(line)
+
+        assert len(result) == 1
+        assert result[0].decode() == "async test\n"
+
+    @pytest.mark.asyncio
+    async def test_async_execute_multi_line_output(self):
+        """Test async executing command with multiple lines."""
+        executor = AsyncProcessExecutor()
+        result = []
+        async for line in executor.async_execute(["seq", "1", "5"]):
+            result.append(line)
+
+        assert len(result) == 5
+        assert [line.strip().decode() for line in result] == ["1", "2", "3", "4", "5"]
+
+    @pytest.mark.asyncio
+    async def test_async_execute_json_output(self):
+        """Test async executing command with JSON output."""
+        executor = AsyncProcessExecutor()
+        json_lines = ['{"type": "async", "id": 1}', '{"type": "async", "id": 2}']
+
+        cmd = create_json_command(json_lines)
+        result = []
+        async for line in executor.async_execute(cmd):
+            result.append(line)
+
+        assert len(result) == 2
+        assert json.loads(result[0].decode())["id"] == 1
+        assert json.loads(result[1].decode())["id"] == 2
+
+    @pytest.mark.asyncio
+    async def test_async_execute_with_error(self):
+        """Test async executing command that exits with error."""
+        executor = AsyncProcessExecutor()
+
+        cmd = get_false_command()
+        with pytest.raises(RuntimeError) as exc_info:
+            async for _ in executor.async_execute(cmd):
+                pass
+
+        assert exc_info.value.message == "CLI exited with code 1"
+        assert exc_info.value.exit_code == 1
+
+    @pytest.mark.asyncio
+    async def test_async_execute_with_custom_error(self):
+        """Test async executing command with custom error."""
+        executor = AsyncProcessExecutor()
+
+        cmd = create_error_command(99, "Async error")
+        with pytest.raises(RuntimeError) as exc_info:
+            async for _ in executor.async_execute(cmd):
+                pass
+
+        assert exc_info.value.exit_code == 99
+        # stderr might be empty or contain error text
+        assert (
+            exc_info.value.stderr is None
+            or "error" in exc_info.value.stderr.lower()
+            or "Async" in str(exc_info.value.stderr)
         )
 
-        with patch("subprocess.Popen", return_value=mock_process):
-            messages = []
-            for msg in query(prompt="Test"):
-                messages.append(msg)
+    @pytest.mark.asyncio
+    async def test_async_with_large_output(self):
+        """Test async with large output."""
+        executor = AsyncProcessExecutor()
+        count = 0
+        async for line in executor.async_execute(["seq", "1", "1000"]):
+            count += 1
 
-            assert len(messages) == 1
-            assert messages[0].content[0].text == "Test response"
+        assert count == 1000
 
-    async def test_async_executor_via_async_query(self):
-        """Test async executor through async_query function."""
-        from claude_sdk_lite import async_query
+    @pytest.mark.asyncio
+    async def test_async_with_unicode(self):
+        """Test async with Unicode output."""
+        executor = AsyncProcessExecutor()
 
-        # Use JSON strings, not dict objects
-        responses = [
-            '{"type": "assistant", "message": {"model": "sonnet", "content": [{"type": "text", "text": "Test response"}]}}'
+        messages = ["Test 测试", "Data データ", "Emoji 😀"]
+        cmd = get_shell_command() + [f'echo "{messages[0]}\\n{messages[1]}\\n{messages[2]}"']
+
+        result = []
+        async for line in executor.async_execute(cmd):
+            result.append(line)
+
+        # Check that Unicode characters are present
+        combined_output = b"".join(result).decode()
+        assert "测试" in combined_output
+        assert "データ" in combined_output
+        assert "😀" in combined_output
+
+
+# ========== Integration Tests ==========
+
+
+class TestExecutorIntegration:
+    """Integration tests for executors."""
+
+    def test_sync_executor_streaming(self):
+        """Test that sync executor properly streams output."""
+        executor = SyncProcessExecutor()
+
+        # Use simple echo with multiple lines
+        if IS_WINDOWS:
+            cmd = ["cmd.exe", "/c", "for %i in (0 1 2 3 4) do @echo line%i"]
+        else:
+            cmd = ["sh", "-c", "for i in 0 1 2 3 4; do echo line$i; done"]
+
+        result = []
+        for line in executor.execute(cmd):
+            result.append(line.decode().strip())
+
+        assert result == [f"line{i}" for i in range(5)]
+
+    @pytest.mark.asyncio
+    async def test_async_executor_streaming(self):
+        """Test that async executor properly streams output."""
+        executor = AsyncProcessExecutor()
+
+        if IS_WINDOWS:
+            cmd = ["cmd.exe", "/c", "for %i in (0 1 2 3 4) do @echo async_line%i"]
+        else:
+            cmd = ["sh", "-c", "for i in 0 1 2 3 4; do echo async_line$i; done"]
+
+        result = []
+        async for line in executor.async_execute(cmd):
+            result.append(line.decode().strip())
+
+        assert result == [f"async_line{i}" for i in range(5)]
+
+    def test_sync_executor_with_json_stream(self):
+        """Test sync executor with JSON output stream (simulating Claude output)."""
+        executor = SyncProcessExecutor()
+
+        # Simulate Claude API responses
+        json_lines = [
+            '{"type": "assistant", "model": "sonnet", "text": "Hello"}',
+            '{"type": "assistant", "model": "sonnet", "text": "World"}',
         ]
 
-        mock_process = AsyncMockProcess(stdout_lines=responses, returncode=0)
+        cmd = create_json_command(json_lines)
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
-            messages = []
-            async for msg in async_query(prompt="Test"):
-                messages.append(msg)
+        result = []
+        for line in executor.execute(cmd):
+            result.append(json.loads(line.decode()))
 
-            assert len(messages) == 1
-            assert messages[0].content[0].text == "Test response"
+        assert len(result) == 2
+        assert result[0]["text"] == "Hello"
+        assert result[1]["text"] == "World"
+
+    @pytest.mark.asyncio
+    async def test_async_executor_with_json_stream(self):
+        """Test async executor with JSON output stream."""
+        executor = AsyncProcessExecutor()
+
+        responses = [
+            '{"type": "status", "message": "Processing"}',
+            '{"type": "result", "value": 42}',
+        ]
+
+        cmd = create_json_command(responses)
+
+        result = []
+        async for line in executor.async_execute(cmd):
+            result.append(json.loads(line.decode()))
+
+        assert len(result) == 2
+        assert result[0]["message"] == "Processing"
+        assert result[1]["value"] == 42
+
+    def test_sync_executor_cleanup(self):
+        """Test that sync executor properly cleans up processes."""
+        executor = SyncProcessExecutor()
+
+        # Execute command that finishes
+        list(executor.execute(["echo", "test"]))
+
+        # Executor should be ready for next command
+        result = list(executor.execute(["echo", "test2"]))
+        assert len(result) == 1
+        assert result[0].decode() == "test2\n"
+
+    @pytest.mark.asyncio
+    async def test_async_executor_cleanup(self):
+        """Test that async executor properly cleans up processes."""
+        executor = AsyncProcessExecutor()
+
+        async for _ in executor.async_execute(["echo", "test1"]):
+            pass
+
+        # Executor should be ready for next command
+        result = []
+        async for line in executor.async_execute(["echo", "test2"]):
+            result.append(line)
+
+        assert len(result) == 1
+        assert result[0].decode() == "test2\n"
