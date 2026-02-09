@@ -20,6 +20,7 @@ from claude_sdk_lite.types import (
     AssistantMessage,
     TextBlock,
 )
+from test_helpers import get_cat_command, get_echo_command
 
 
 class TestAsyncClaudeClientInit:
@@ -106,7 +107,7 @@ class TestAsyncClaudeClientConnection:
         """Test that context manager auto-starts the process."""
         handler = DefaultMessageHandler()
         client = AsyncClaudeClient(message_handler=handler)
-        client._build_command = lambda: ["cat"]
+        client._build_command = lambda: get_cat_command()
 
         async with client:
             assert client.is_connected
@@ -118,7 +119,7 @@ class TestAsyncClaudeClientConnection:
         """Test that connecting when already connected returns early."""
         handler = DefaultMessageHandler()
         client = AsyncClaudeClient(message_handler=handler)
-        client._build_command = lambda: ["cat"]
+        client._build_command = lambda: get_cat_command()
 
         await client.connect()
         is_connected = client.is_connected
@@ -132,7 +133,7 @@ class TestAsyncClaudeClientConnection:
         """Test manual connect and disconnect."""
         handler = DefaultMessageHandler()
         client = AsyncClaudeClient(message_handler=handler)
-        client._build_command = lambda: ["cat"]
+        client._build_command = lambda: get_cat_command()
 
         assert not client.is_connected
 
@@ -169,7 +170,7 @@ class TestAsyncClaudeClientSendRequest:
 
         handler = TrackingHandler()
         client = AsyncClaudeClient(message_handler=handler)
-        client._build_command = lambda: ["echo", "{}"]
+        client._build_command = lambda: get_echo_command("{}")
 
         await client.connect()
         await client.send_request("Test prompt")
@@ -192,7 +193,7 @@ class TestAsyncClaudeClientSendRequest:
 
         handler = AsyncTrackingHandler()
         client = AsyncClaudeClient(message_handler=handler)
-        client._build_command = lambda: ["echo", "{}"]
+        client._build_command = lambda: get_echo_command("{}")
 
         await client.connect()
         await client.send_request("Test prompt")
@@ -258,12 +259,16 @@ print(json.dumps({"type": "result", "subtype": "complete", "duration_ms": 100, "
         handler = AsyncCountingHandler()
         client = AsyncClaudeClient(message_handler=handler)
 
-        # Use shell commands to output JSON messages
-        client._build_command = lambda: [
-            "sh",
-            "-c",
-            'echo \'{"type": "assistant", "message": {"model": "test", "content": [{"type": "text", "text": "Hello"}]}}\' && echo \'{"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": false, "num_turns": 1, "session_id": "test"}\'',
-        ]
+        # Use Python script to output JSON messages (more portable)
+        import sys
+
+        script = """
+import sys
+import json
+print(json.dumps({"type": "assistant", "message": {"model": "test", "content": [{"type": "text", "text": "Hello"}]}}))
+print(json.dumps({"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": False, "num_turns": 1, "session_id": "test"}))
+"""
+        client._build_command = lambda: [sys.executable, "-c", script]
 
         await client.connect()
         await client._manager.write_request({"start": True})
@@ -291,7 +296,7 @@ class TestAsyncClaudeClientInterrupt:
         """Test that interrupt sends signal to subprocess."""
         handler = DefaultMessageHandler()
         client = AsyncClaudeClient(message_handler=handler)
-        client._build_command = lambda: ["cat"]
+        client._build_command = lambda: get_cat_command()
 
         await client.connect()
 
@@ -334,15 +339,20 @@ class TestAsyncClaudeClientProperties:
     @pytest.mark.asyncio
     async def test_stderr_property(self):
         """Test get_stderr method."""
+        import sys
+
         handler = DefaultMessageHandler()
         client = AsyncClaudeClient(message_handler=handler)
 
-        # Use sh to output to stderr and stdout
-        client._build_command = lambda: [
-            "sh",
-            "-c",
-            'echo "error message" >&2 && echo \'{"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": false, "num_turns": 1, "session_id": "test"}\'',
-        ]
+        # Use Python script to output to stderr and stdout
+        script = '''
+import sys
+import json
+sys.stderr.write("error message\\n")
+sys.stderr.flush()
+print(json.dumps({"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": False, "num_turns": 1, "session_id": "test"}))
+'''
+        client._build_command = lambda: [sys.executable, "-c", script]
 
         await client.connect()
         await client._manager.write_request({"start": True})

@@ -566,7 +566,7 @@ class AsyncPersistentProcessManager:
                     if not line:  # EOF
                         break
 
-                    line_str = line.decode().strip()
+                    line_str = line.decode("utf-8", errors="replace").strip()
                     if line_str:
                         # Use lock to protect concurrent access
                         if self._stderr_lock:

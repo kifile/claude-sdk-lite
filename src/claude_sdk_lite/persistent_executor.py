@@ -580,7 +580,7 @@ class PersistentProcessManager:
                     if not line:  # EOF
                         break
 
-                    line_str = line.decode().strip()
+                    line_str = line.decode("utf-8", errors="replace").strip()
                     if line_str:
                         # Use lock to protect concurrent access to stderr_buffer
                         if self._stderr_lock:

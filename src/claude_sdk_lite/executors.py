@@ -85,7 +85,7 @@ class SyncProcessExecutor(ProcessExecutor):
             if returncode != 0:
                 stderr_output = ""
                 if process.stderr:
-                    stderr_output = process.stderr.read().decode()
+                    stderr_output = process.stderr.read().decode("utf-8", errors="replace")
 
                 raise ProcessExecutionError(
                     message=f"CLI exited with code {returncode}",
@@ -161,7 +161,7 @@ class AsyncProcessExecutor:
             if returncode != 0:
                 stderr_output = ""
                 if process.stderr:
-                    stderr_output = (await process.stderr.read()).decode()
+                    stderr_output = (await process.stderr.read()).decode("utf-8", errors="replace")
 
                 raise ProcessExecutionError(
                     message=f"CLI exited with code {returncode}",

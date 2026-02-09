@@ -9,6 +9,13 @@ import time
 import pytest
 
 from claude_sdk_lite.persistent_executor import PersistentProcessManager
+from test_helpers import (
+    get_cat_command,
+    get_grep_command,
+    get_head_command,
+    get_true_command,
+    IS_WINDOWS,
+)
 
 # ========== Helper Functions ==========
 
@@ -35,7 +42,7 @@ class TestPersistentProcessManagerLifecycle:
         assert not manager.is_alive()
 
         # cat will keep running, reading from stdin and writing to stdout
-        manager.start(["cat"])
+        manager.start(get_cat_command())
         assert manager.is_alive()
 
         manager.stop()
@@ -44,18 +51,18 @@ class TestPersistentProcessManagerLifecycle:
     def test_start_when_already_running_raises_error(self):
         """Test that starting when already running raises RuntimeError."""
         manager = PersistentProcessManager()
-        manager.start(["cat"])
+        manager.start(get_cat_command())
 
         try:
             with pytest.raises(RuntimeError, match="Process already running"):
-                manager.start(["cat"])
+                manager.start(get_cat_command())
         finally:
             manager.stop()
 
     def test_stop_is_idempotent(self):
         """Test that stop can be called multiple times safely."""
         manager = PersistentProcessManager()
-        manager.start(["cat"])
+        manager.start(get_cat_command())
 
         manager.stop()
         assert not manager.is_alive()
@@ -67,7 +74,7 @@ class TestPersistentProcessManagerLifecycle:
     def test_context_manager_auto_cleanup(self):
         """Test that context manager automatically cleans up."""
         with PersistentProcessManager() as manager:
-            manager.start(["cat"])
+            manager.start(get_cat_command())
             assert manager.is_alive()
 
         # Process should be stopped after exiting context
@@ -77,7 +84,7 @@ class TestPersistentProcessManagerLifecycle:
         """Test that is_alive returns False after process exits naturally."""
         manager = PersistentProcessManager()
         # true exits immediately after doing nothing
-        manager.start(["true"])
+        manager.start(get_true_command())
 
         time.sleep(0.1)  # Give it time to exit
         assert not manager.is_alive()
@@ -96,7 +103,7 @@ class TestBidirectionalCommunication:
         So we test the underlying bidirectional communication.
         """
         manager = PersistentProcessManager()
-        manager.start(["cat"])
+        manager.start(get_cat_command())
 
         try:
             # Write JSON (which becomes bytes in stdin)
@@ -109,7 +116,7 @@ class TestBidirectionalCommunication:
 
             response = None
             for line in manager.read_lines(timeout=2.0):
-                response = json.loads(line.decode())
+                response = json.loads(line.decode("utf-8"))
                 break  # Only read one line
 
             assert response is not None
@@ -121,7 +128,7 @@ class TestBidirectionalCommunication:
     def test_multiple_round_trips_with_cat(self):
         """Test multiple write-read cycles with cat."""
         manager = PersistentProcessManager()
-        manager.start(["cat"])
+        manager.start(get_cat_command())
 
         try:
             # Send multiple requests
@@ -138,7 +145,7 @@ class TestBidirectionalCommunication:
 
                 import json
 
-                response = json.loads(responses[0].decode())
+                response = json.loads(responses[0].decode("utf-8"))
                 assert response == msg
 
         finally:
@@ -147,7 +154,7 @@ class TestBidirectionalCommunication:
     def test_concurrent_writes_then_reads(self):
         """Test writing multiple requests, then reading all responses."""
         manager = PersistentProcessManager()
-        manager.start(["cat"])
+        manager.start(get_cat_command())
 
         try:
             # Send all requests first
@@ -159,7 +166,7 @@ class TestBidirectionalCommunication:
             import json
 
             responses = read_n_lines(manager, num_requests)
-            responses = [json.loads(r.decode()) for r in responses]
+            responses = [json.loads(r.decode("utf-8")) for r in responses]
 
             assert len(responses) == num_requests
             assert [r["sequence"] for r in responses] == [0, 1, 2]
@@ -193,7 +200,7 @@ class TestErrorHandling:
         manager = PersistentProcessManager()
         # Use a shell command that exits after processing stdin
         # 'head -1' reads one line then exits
-        manager.start(["head", "-1"])
+        manager.start(get_head_command(1))
 
         try:
             # First request should succeed
@@ -278,7 +285,7 @@ for line in sys.stdin:
         """Test that timeout doesn't error if process is still alive."""
         manager = PersistentProcessManager()
         # grep will wait for input
-        manager.start(["grep", "pattern"])
+        manager.start(get_grep_command("pattern"))
 
         try:
             # Don't send anything, directly test queue timeout behavior
@@ -310,7 +317,7 @@ class TestInterruptFunctionality:
         """Test that write_interrupt sends control request."""
         manager = PersistentProcessManager()
         # cat will echo the interrupt request back
-        manager.start(["cat"])
+        manager.start(get_cat_command())
 
         try:
             manager.write_interrupt()
@@ -321,7 +328,7 @@ class TestInterruptFunctionality:
 
             import json
 
-            response = json.loads(responses[0].decode())
+            response = json.loads(responses[0].decode("utf-8"))
             assert response["type"] == "control_request"
             assert response["subtype"] == "interrupt"
 
@@ -338,7 +345,7 @@ class TestDataIntegrity:
     def test_large_data_transfer(self):
         """Test handling of large JSON payloads."""
         manager = PersistentProcessManager()
-        manager.start(["cat"])
+        manager.start(get_cat_command())
 
         try:
             # Send large data
@@ -351,7 +358,7 @@ class TestDataIntegrity:
 
             import json
 
-            response = json.loads(responses[0].decode())
+            response = json.loads(responses[0].decode("utf-8"))
             assert response["data"] == large_data
 
         finally:
@@ -360,7 +367,7 @@ class TestDataIntegrity:
     def test_unicode_and_special_characters(self):
         """Test handling of Unicode and special characters."""
         manager = PersistentProcessManager()
-        manager.start(["cat"])
+        manager.start(get_cat_command())
 
         try:
             test_strings = [
@@ -379,7 +386,7 @@ class TestDataIntegrity:
 
                 import json
 
-                response = json.loads(responses[0].decode())
+                response = json.loads(responses[0].decode("utf-8"))
                 assert response["message"] == test_str
 
         finally:
@@ -388,7 +395,7 @@ class TestDataIntegrity:
     def test_json_formatting_preserved(self):
         """Test that JSON structure is preserved through round-trip."""
         manager = PersistentProcessManager()
-        manager.start(["cat"])
+        manager.start(get_cat_command())
 
         try:
             # Complex nested structure
@@ -407,7 +414,7 @@ class TestDataIntegrity:
 
             import json
 
-            response = json.loads(responses[0].decode())
+            response = json.loads(responses[0].decode("utf-8"))
             assert response == complex_request
 
         finally:
@@ -423,7 +430,7 @@ class TestIntegrationScenarios:
     def test_session_like_conversation(self):
         """Test a realistic session-like interaction pattern."""
         manager = PersistentProcessManager()
-        manager.start(["cat"])
+        manager.start(get_cat_command())
 
         try:
             # Simulate a conversation
@@ -439,7 +446,7 @@ class TestIntegrationScenarios:
             for msg in messages:
                 manager.write_request(msg)
                 for line in manager.read_lines(timeout=2.0):
-                    response = json.loads(line.decode())
+                    response = json.loads(line.decode("utf-8"))
                     responses.append(response)
                     break  # Only read one response per message
 
@@ -455,13 +462,13 @@ class TestIntegrationScenarios:
         manager = PersistentProcessManager()
 
         # First session
-        manager.start(["cat"])
+        manager.start(get_cat_command())
         manager.write_request({"session": 1})
         read_n_lines(manager, 1)
         manager.stop()
 
         # Second session (should work)
-        manager.start(["cat"])
+        manager.start(get_cat_command())
         manager.write_request({"session": 2})
         responses = read_n_lines(manager, 1)
         assert len(responses) == 1
@@ -470,7 +477,7 @@ class TestIntegrationScenarios:
     def test_graceful_shutdown_with_cleanup(self):
         """Test graceful shutdown and resource cleanup."""
         manager = PersistentProcessManager()
-        manager.start(["cat"])
+        manager.start(get_cat_command())
 
         # Do some work
         import json
@@ -479,7 +486,7 @@ class TestIntegrationScenarios:
             manager.write_request({"id": i})
             responses = read_n_lines(manager, 1)
             assert len(responses) == 1
-            assert json.loads(responses[0].decode())["id"] == i
+            assert json.loads(responses[0].decode("utf-8"))["id"] == i
 
         # Stop should cleanup cleanly
         manager.stop()
@@ -495,7 +502,7 @@ class TestGeneratorBehavior:
     def test_generator_can_be_closed_early(self):
         """Test that generator can be closed before consuming all lines."""
         manager = PersistentProcessManager()
-        manager.start(["cat"])
+        manager.start(get_cat_command())
 
         try:
             # Send request
@@ -517,7 +524,7 @@ class TestGeneratorBehavior:
     def test_read_lines_with_timeout(self):
         """Test read_lines respects timeout parameter."""
         manager = PersistentProcessManager()
-        manager.start(["cat"])
+        manager.start(get_cat_command())
 
         try:
             manager.write_request({"test": "timeout"})

@@ -6,6 +6,7 @@ and session management with the new message handler architecture.
 """
 
 import asyncio
+import sys
 import threading
 import time
 
@@ -24,6 +25,13 @@ from claude_sdk_lite.types import (
     ResultMessage,
     TextBlock,
 )
+from test_helpers import (
+    get_cat_command,
+    get_echo_command,
+    get_head_command,
+    get_shell_command,
+    IS_WINDOWS,
+)
 
 
 def create_echo_script(num_lines=1, add_result=False):
@@ -36,19 +44,19 @@ def create_echo_script(num_lines=1, add_result=False):
     Returns:
         List of command arguments for subprocess
     """
-    # Build echo commands - each echoes a test message
+    # Use Python script for cross-platform compatibility
     echo_cmds = []
     for i in range(num_lines):
-        echo_cmds.append(f'echo \'{{"seq": {i}, "text": "message{i}"}}\' ')
+        echo_cmds.append(f'print(json.dumps({{"seq": {i}, "text": "message{i}"}}))')
 
     # Add result message if requested
     if add_result:
         echo_cmds.append(
-            'echo \'{"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": false, "num_turns": 1, "session_id": "test-session"}\''
+            'print(json.dumps({"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": False, "num_turns": 1, "session_id": "test-session"}))'
         )
 
-    # Combine all commands with &&
-    return ["sh", "-c", " && ".join(echo_cmds)]
+    script = f"import json; " + "; ".join(echo_cmds)
+    return [sys.executable, "-c", script]
 
 
 class TestClaudeClientRealSubprocess:
@@ -60,12 +68,16 @@ class TestClaudeClientRealSubprocess:
         handler = DefaultMessageHandler()
         client = ClaudeClient(message_handler=handler, options=options)
 
-        # Use shell commands to output messages (cat to read stdin, then echo output)
-        client._build_command = lambda: [
-            "sh",
-            "-c",
-            'cat && echo \'{"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": false, "num_turns": 1, "session_id": "test"}\'',
-        ]
+        # Use Python script to output messages after reading stdin
+        script = '''
+import sys, json
+line = sys.stdin.readline()
+if line:
+    data = json.loads(line)
+    print(json.dumps(data))
+print(json.dumps({"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": False, "num_turns": 1, "session_id": "test"}))
+'''
+        client._build_command = lambda: [sys.executable, "-c", script]
 
         try:
             # Connect - this starts the listener thread
@@ -93,17 +105,18 @@ class TestClaudeClientRealSubprocess:
         handler = DefaultMessageHandler()
         client = ClaudeClient(message_handler=handler, options=options)
 
-        # Use shell with a loop that reads stdin and outputs messages 3 times
-        client._build_command = lambda: [
-            "sh",
-            "-c",
-            """for i in 1 2 3; do
-                line=$(head -n 1)
-                [ -n "$line" ] && echo "$line"
-                echo \'{"type": "assistant", "message": {"model": "test", "content": [{"type": "text", "text": "Response \'$i\'"}]}}\'
-                echo \'{"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": false, "num_turns": 1, "session_id": "test"}\'
-            done""",
-        ]
+        # Use Python script with a loop that reads stdin and outputs messages 3 times
+        script = '''
+import sys, json
+for i in range(1, 4):
+    line = sys.stdin.readline()
+    if line:
+        data = json.loads(line)
+        print(json.dumps(data))
+    print(json.dumps({"type": "assistant", "message": {"model": "test", "content": [{"type": "text", "text": f"Response {i}"}]}}))
+    print(json.dumps({"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": False, "num_turns": 1, "session_id": "test"}))
+'''
+        client._build_command = lambda: [sys.executable, "-c", script]
 
         try:
             client.connect()
@@ -129,7 +142,7 @@ class TestClaudeClientRealSubprocess:
         client = ClaudeClient(options=options, message_handler=handler)
         session_id = client.session_id
 
-        client._build_command = lambda: ["cat"]
+        client._build_command = lambda: get_cat_command()
 
         try:
             client.connect()
@@ -155,7 +168,7 @@ class TestClaudeClientRealSubprocess:
         options = ClaudeOptions()
         handler = DefaultMessageHandler()
         client = ClaudeClient(options=options, message_handler=handler)
-        client._build_command = lambda: ["cat"]
+        client._build_command = lambda: get_cat_command()
 
         try:
             client.connect()
@@ -177,12 +190,13 @@ class TestClaudeClientMessageHandling:
         handler = DefaultMessageHandler()
         client = ClaudeClient(message_handler=handler, options=options)
 
-        # Use shell commands to output messages
-        client._build_command = lambda: [
-            "sh",
-            "-c",
-            'echo \'{"type": "assistant", "message": {"model": "claude-sonnet-4-5", "content": [{"type": "text", "text": "Hello, world!"}, {"type": "thinking", "thinking": "Let me think...", "signature": "sig"}]}}\' && echo \'{"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": false, "num_turns": 1, "session_id": "test-session"}\'',
-        ]
+        # Use Python script to output messages
+        script = '''
+import sys, json
+print(json.dumps({"type": "assistant", "message": {"model": "claude-sonnet-4-5", "content": [{"type": "text", "text": "Hello, world!"}, {"type": "thinking", "thinking": "Let me think...", "signature": "sig"}]}}))
+print(json.dumps({"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": False, "num_turns": 1, "session_id": "test-session"}))
+'''
+        client._build_command = lambda: [sys.executable, "-c", script]
 
         try:
             client.connect()
@@ -211,7 +225,7 @@ class TestClaudeClientMessageHandling:
         import tempfile
 
         # Create a temporary file with mixed valid/invalid JSON
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt") as f:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt", encoding="utf-8") as f:
             temp_file = f.name
             f.write('{"type": "assistant", "message": {"model": "sonnet", "content": []}}\n')
             f.write("invalid json line\n")
@@ -237,12 +251,18 @@ class TestClaudeClientMessageHandling:
             handler = TrackingHandler()
             client = ClaudeClient(options=options, message_handler=handler)
 
-            # Use cat to output the file content once
-            client._build_command = lambda: ["cat", temp_file]
+            # Use Python script to output the file content once (cross-platform)
+            script = f'''
+import sys
+with open(r"{temp_file}", "r", encoding="utf-8") as f:
+    for line in f:
+        print(line, end="")
+'''
+            client._build_command = lambda: [sys.executable, "-c", script]
 
             client.connect()
 
-            # Send trigger to start cat
+            # Send trigger to start
             client._manager.write_request({"start": True})
 
             # Wait for listener to process all messages
@@ -272,8 +292,9 @@ class TestClaudeClientErrorScenarios:
         handler = DefaultMessageHandler()
         client = ClaudeClient(message_handler=handler, options=options)
 
-        # Use shell command that reads one line then exits
-        client._build_command = lambda: ["sh", "-c", "head -n 1"]
+        # Use Python command that reads one line then exits
+        script = 'import sys; line = sys.stdin.readline(); print(line if line else "")'
+        client._build_command = lambda: [sys.executable, "-c", script]
 
         try:
             client.connect()
@@ -295,12 +316,12 @@ class TestClaudeClientErrorScenarios:
         handler1 = DefaultMessageHandler()
         client = ClaudeClient(message_handler=handler1, options=options)
 
-        # Use shell command that simply echoes a result message
-        client._build_command = lambda: [
-            "sh",
-            "-c",
-            'echo \'{"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": false, "num_turns": 1, "session_id": "test"}\'',
-        ]
+        # Use Python script that echoes a result message
+        script = '''
+import sys, json
+print(json.dumps({"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": False, "num_turns": 1, "session_id": "test"}))
+'''
+        client._build_command = lambda: [sys.executable, "-c", script]
 
         try:
             # First session
@@ -317,11 +338,7 @@ class TestClaudeClientErrorScenarios:
             # Second session - create new client to simulate fresh start
             handler2 = DefaultMessageHandler()
             client2 = ClaudeClient(message_handler=handler2, options=options)
-            client2._build_command = lambda: [
-                "sh",
-                "-c",
-                'echo \'{"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": false, "num_turns": 1, "session_id": "test"}\'',
-            ]
+            client2._build_command = lambda: [sys.executable, "-c", script]
             client2.connect()
             client2.message_handler._query_complete_event = threading.Event()
             client2._manager.write_request({"session": 2})
@@ -344,7 +361,7 @@ class TestClaudeClientContextManager:
         options = ClaudeOptions()
         handler = DefaultMessageHandler()
         client = ClaudeClient(options=options, message_handler=handler)
-        client._build_command = lambda: ["cat"]
+        client._build_command = lambda: get_cat_command()
 
         with pytest.raises(ValueError):
             with client:
@@ -365,8 +382,8 @@ class TestClaudeClientContextManager:
         client1 = ClaudeClient(options=options1, message_handler=handler1)
         client2 = ClaudeClient(options=options2, message_handler=handler2)
 
-        client1._build_command = lambda: ["cat"]
-        client2._build_command = lambda: ["cat"]
+        client1._build_command = lambda: get_cat_command()
+        client2._build_command = lambda: get_cat_command()
 
         with client1:
             with client2:
@@ -392,12 +409,14 @@ class TestClaudeClientStderrCapture:
         handler = DefaultMessageHandler()
         client = ClaudeClient(message_handler=handler, options=options)
 
-        # Use shell command to write to stderr
-        client._build_command = lambda: [
-            "sh",
-            "-c",
-            'echo "stderr message" >&2 && echo \'{"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": false, "num_turns": 1, "session_id": "test"}\'',
-        ]
+        # Use Python script to write to stderr
+        script = '''
+import sys, json
+sys.stderr.write("stderr message\\n")
+sys.stderr.flush()
+print(json.dumps({"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": False, "num_turns": 1, "session_id": "test"}))
+'''
+        client._build_command = lambda: [sys.executable, "-c", script]
 
         try:
             client.connect()
@@ -425,7 +444,7 @@ class TestClaudeClientLargeData:
         options = ClaudeOptions()
         handler = DefaultMessageHandler()
         client = ClaudeClient(options=options, message_handler=handler)
-        client._build_command = lambda: ["cat"]
+        client._build_command = lambda: get_cat_command()
 
         # Create a large message
         large_text = "x" * 10000
@@ -451,19 +470,20 @@ class TestClaudeClientLargeData:
         """Test sending many messages in sequence."""
         options = ClaudeOptions()
 
-        # Use shell with a loop that outputs 10 messages
+        # Use Python script with a loop that outputs 10 messages
         handler = DefaultMessageHandler()
+        script = '''
+import sys, json
+for i in range(1, 11):
+    line = sys.stdin.readline()
+    if line:
+        data = json.loads(line)
+        print(json.dumps(data))
+    print(json.dumps({"type": "assistant", "message": {"model": "test", "content": [{"type": "text", "text": f"Message {i}"}]}}))
+print(json.dumps({"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": False, "num_turns": 10, "session_id": "test"}))
+'''
         client = ClaudeClient(message_handler=handler, options=options)
-        client._build_command = lambda: [
-            "sh",
-            "-c",
-            """for i in $(seq 1 10); do
-                line=$(head -n 1)
-                [ -n "$line" ] && echo "$line"
-                echo \'{"type": "assistant", "message": {"model": "test", "content": [{"type": "text", "text": "Message \'$i\'"}]}}\'
-            done
-            echo \'{"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": false, "num_turns": 10, "session_id": "test"}\' """,
-        ]
+        client._build_command = lambda: [sys.executable, "-c", script]
 
         try:
             client.connect()
@@ -490,12 +510,14 @@ class TestClaudeClientTimeouts:
 
     def test_read_timeout_with_alive_process(self):
         """Test that timeout works correctly."""
+        import sys
+
         options = ClaudeOptions()
         handler = DefaultMessageHandler()
         client = ClaudeClient(options=options, message_handler=handler)
 
-        # Use 'sleep' command that waits then exits
-        client._build_command = lambda: ["sleep", "0.1"]
+        # Use Python script that sleeps then exits
+        client._build_command = lambda: [sys.executable, "-c", "import time; time.sleep(0.1)"]
 
         try:
             client.connect()
@@ -520,12 +542,12 @@ class TestAsyncClaudeClientRealSubprocess:
         handler = DefaultMessageHandler()
         client = AsyncClaudeClient(message_handler=handler, options=options)
 
-        # Use shell commands to output messages
-        client._build_command = lambda: [
-            "sh",
-            "-c",
-            'echo \'{"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": false, "num_turns": 1, "session_id": "test"}\'',
-        ]
+        # Use Python script to output messages
+        script = '''
+import sys, json
+print(json.dumps({"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": False, "num_turns": 1, "session_id": "test"}))
+'''
+        client._build_command = lambda: [sys.executable, "-c", script]
 
         try:
             # Connect
@@ -551,19 +573,20 @@ class TestAsyncClaudeClientRealSubprocess:
         """Test multiple queries within the same session."""
         options = ClaudeOptions()
 
-        # Use shell with a loop that outputs 3 responses
+        # Use Python script with a loop that outputs 3 responses
         handler = AsyncDefaultMessageHandler()
+        script = '''
+import sys, json
+for i in range(1, 4):
+    line = sys.stdin.readline()
+    if line:
+        data = json.loads(line)
+        print(json.dumps(data))
+    print(json.dumps({"type": "assistant", "message": {"model": "test", "content": [{"type": "text", "text": f"Response {i}"}]}}))
+    print(json.dumps({"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": False, "num_turns": 1, "session_id": "test"}))
+'''
         client = AsyncClaudeClient(message_handler=handler, options=options)
-        client._build_command = lambda: [
-            "sh",
-            "-c",
-            """for i in 1 2 3; do
-                line=$(head -n 1)
-                [ -n "$line" ] && echo "$line"
-                echo \'{"type": "assistant", "message": {"model": "test", "content": [{"type": "text", "text": "Response \'$i\'"}]}}\'
-                echo \'{"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": false, "num_turns": 1, "session_id": "test"}\'
-            done""",
-        ]
+        client._build_command = lambda: [sys.executable, "-c", script]
 
         try:
             await client.connect()
@@ -586,7 +609,7 @@ class TestAsyncClaudeClientRealSubprocess:
         options = ClaudeOptions()
         handler = DefaultMessageHandler()
         client = AsyncClaudeClient(options=options, message_handler=handler)
-        client._build_command = lambda: ["cat"]
+        client._build_command = lambda: get_cat_command()
 
         async with client:
             assert client.is_connected
@@ -602,7 +625,7 @@ class TestAsyncClaudeClientRealSubprocess:
         options = ClaudeOptions()
         handler = DefaultMessageHandler()
         client = AsyncClaudeClient(options=options, message_handler=handler)
-        client._build_command = lambda: ["cat"]
+        client._build_command = lambda: get_cat_command()
 
         try:
             await client.connect()
@@ -676,12 +699,13 @@ class TestMessageHandlerIntegration:
         handler = CustomHandler()
         client = ClaudeClient(message_handler=handler, options=options)
 
-        # Use shell commands to output messages
-        client._build_command = lambda: [
-            "sh",
-            "-c",
-            'echo \'{"type": "assistant", "message": {"model": "test", "content": [{"type": "text", "text": "Hi"}]}}\' && echo \'{"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": false, "num_turns": 1, "session_id": "test"}\'',
-        ]
+        # Use Python script to output messages
+        script = '''
+import sys, json
+print(json.dumps({"type": "assistant", "message": {"model": "test", "content": [{"type": "text", "text": "Hi"}]}}))
+print(json.dumps({"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": False, "num_turns": 1, "session_id": "test"}))
+'''
+        client._build_command = lambda: [sys.executable, "-c", script]
 
         try:
             client.connect()
@@ -702,12 +726,13 @@ class TestMessageHandlerIntegration:
         handler = AsyncDefaultMessageHandler()
         client = AsyncClaudeClient(message_handler=handler, options=options)
 
-        # Use shell commands to output messages
-        client._build_command = lambda: [
-            "sh",
-            "-c",
-            'echo \'{"type": "assistant", "message": {"model": "test", "content": [{"type": "text", "text": "Hi"}]}}\' && echo \'{"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": false, "num_turns": 1, "session_id": "test"}\'',
-        ]
+        # Use Python script to output messages
+        script = '''
+import sys, json
+print(json.dumps({"type": "assistant", "message": {"model": "test", "content": [{"type": "text", "text": "Hi"}]}}))
+print(json.dumps({"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": False, "num_turns": 1, "session_id": "test"}))
+'''
+        client._build_command = lambda: [sys.executable, "-c", script]
 
         try:
             await client.connect()

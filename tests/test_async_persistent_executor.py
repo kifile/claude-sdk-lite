@@ -3,11 +3,18 @@
 Uses standard Unix commands (cat, wc, grep, etc.) to test subprocess communication.
 """
 
+import asyncio
 import sys
 
 import pytest
 
 from claude_sdk_lite.async_persistent_executor import AsyncPersistentProcessManager
+from test_helpers import (
+    get_cat_command,
+    get_grep_command,
+    get_head_command,
+    get_true_command,
+)
 
 # ========== Helper Functions ==========
 
@@ -35,7 +42,7 @@ class TestAsyncPersistentProcessManagerLifecycle:
         assert not manager.is_alive()
 
         # cat will keep running, reading from stdin and writing to stdout
-        await manager.start(["cat"])
+        await manager.start(get_cat_command())
         assert manager.is_alive()
 
         await manager.stop()
@@ -45,11 +52,11 @@ class TestAsyncPersistentProcessManagerLifecycle:
     async def test_start_when_already_running_raises_error(self):
         """Test that starting when already running raises RuntimeError."""
         manager = AsyncPersistentProcessManager()
-        await manager.start(["cat"])
+        await manager.start(get_cat_command())
 
         try:
             with pytest.raises(RuntimeError, match="Process already running"):
-                await manager.start(["cat"])
+                await manager.start(get_cat_command())
         finally:
             await manager.stop()
 
@@ -57,7 +64,7 @@ class TestAsyncPersistentProcessManagerLifecycle:
     async def test_stop_is_idempotent(self):
         """Test that stop can be called multiple times safely."""
         manager = AsyncPersistentProcessManager()
-        await manager.start(["cat"])
+        await manager.start(get_cat_command())
 
         await manager.stop()
         assert not manager.is_alive()
@@ -70,7 +77,7 @@ class TestAsyncPersistentProcessManagerLifecycle:
     async def test_context_manager_auto_cleanup(self):
         """Test that async context manager automatically cleans up."""
         async with AsyncPersistentProcessManager() as manager:
-            await manager.start(["cat"])
+            await manager.start(get_cat_command())
             assert manager.is_alive()
 
         # Process should be stopped after exiting context
@@ -81,7 +88,7 @@ class TestAsyncPersistentProcessManagerLifecycle:
         """Test that is_alive returns False after process exits naturally."""
         manager = AsyncPersistentProcessManager()
         # true exits immediately after doing nothing
-        await manager.start(["true"])
+        await manager.start(get_true_command())
 
         await asyncio.sleep(0.1)  # Give it time to exit
         assert not manager.is_alive()
@@ -97,7 +104,7 @@ class TestAsyncBidirectionalCommunication:
     async def test_write_and_read_raw_bytes(self):
         """Test writing raw bytes to cat and reading them back."""
         manager = AsyncPersistentProcessManager()
-        await manager.start(["cat"])
+        await manager.start(get_cat_command())
 
         try:
             # Write JSON (which becomes bytes in stdin)
@@ -109,7 +116,7 @@ class TestAsyncBidirectionalCommunication:
 
             response = None
             async for line in manager.read_lines(timeout=2.0):
-                response = json.loads(line.decode())
+                response = json.loads(line.decode("utf-8"))
                 break  # Only read one line
 
             assert response is not None
@@ -122,7 +129,7 @@ class TestAsyncBidirectionalCommunication:
     async def test_multiple_round_trips_with_cat(self):
         """Test multiple write-read cycles with cat."""
         manager = AsyncPersistentProcessManager()
-        await manager.start(["cat"])
+        await manager.start(get_cat_command())
 
         try:
             # Send multiple requests
@@ -139,7 +146,7 @@ class TestAsyncBidirectionalCommunication:
 
                 import json
 
-                response = json.loads(responses[0].decode())
+                response = json.loads(responses[0].decode("utf-8"))
                 assert response == msg
 
         finally:
@@ -149,7 +156,7 @@ class TestAsyncBidirectionalCommunication:
     async def test_concurrent_writes_then_reads(self):
         """Test writing multiple requests, then reading all responses."""
         manager = AsyncPersistentProcessManager()
-        await manager.start(["cat"])
+        await manager.start(get_cat_command())
 
         try:
             # Send all requests first
@@ -161,7 +168,7 @@ class TestAsyncBidirectionalCommunication:
             import json
 
             responses = await read_n_lines_async(manager, num_requests)
-            responses = [json.loads(r.decode()) for r in responses]
+            responses = [json.loads(r.decode("utf-8")) for r in responses]
 
             assert len(responses) == num_requests
             assert [r["sequence"] for r in responses] == [0, 1, 2]
@@ -199,7 +206,7 @@ class TestAsyncErrorHandling:
         manager = AsyncPersistentProcessManager()
         # Use a shell command that exits after processing stdin
         # 'head -1' reads one line then exits
-        await manager.start(["head", "-1"])
+        await manager.start(get_head_command(1))
 
         try:
             # First request should succeed
@@ -284,7 +291,7 @@ for line in sys.stdin:
         """Test that timeout doesn't error if process is still alive."""
         manager = AsyncPersistentProcessManager()
         # grep will wait for input
-        await manager.start(["grep", "pattern"])
+        await manager.start(get_grep_command("pattern"))
 
         try:
             # Don't send anything, directly test queue timeout behavior
@@ -315,7 +322,7 @@ class TestAsyncInterruptFunctionality:
         """Test that write_interrupt sends control request."""
         manager = AsyncPersistentProcessManager()
         # cat will echo the interrupt request back
-        await manager.start(["cat"])
+        await manager.start(get_cat_command())
 
         try:
             await manager.write_interrupt()
@@ -326,7 +333,7 @@ class TestAsyncInterruptFunctionality:
 
             import json
 
-            response = json.loads(responses[0].decode())
+            response = json.loads(responses[0].decode("utf-8"))
             assert response["type"] == "control_request"
             assert response["subtype"] == "interrupt"
 
@@ -344,7 +351,7 @@ class TestAsyncDataIntegrity:
     async def test_large_data_transfer(self):
         """Test handling of large JSON payloads."""
         manager = AsyncPersistentProcessManager()
-        await manager.start(["cat"])
+        await manager.start(get_cat_command())
 
         try:
             # Send large data
@@ -357,7 +364,7 @@ class TestAsyncDataIntegrity:
 
             import json
 
-            response = json.loads(responses[0].decode())
+            response = json.loads(responses[0].decode("utf-8"))
             assert response["data"] == large_data
 
         finally:
@@ -367,7 +374,7 @@ class TestAsyncDataIntegrity:
     async def test_unicode_and_special_characters(self):
         """Test handling of Unicode and special characters."""
         manager = AsyncPersistentProcessManager()
-        await manager.start(["cat"])
+        await manager.start(get_cat_command())
 
         try:
             test_strings = [
@@ -386,7 +393,7 @@ class TestAsyncDataIntegrity:
 
                 import json
 
-                response = json.loads(responses[0].decode())
+                response = json.loads(responses[0].decode("utf-8"))
                 assert response["message"] == test_str
 
         finally:
@@ -396,7 +403,7 @@ class TestAsyncDataIntegrity:
     async def test_json_formatting_preserved(self):
         """Test that JSON structure is preserved through round-trip."""
         manager = AsyncPersistentProcessManager()
-        await manager.start(["cat"])
+        await manager.start(get_cat_command())
 
         try:
             # Complex nested structure
@@ -415,7 +422,7 @@ class TestAsyncDataIntegrity:
 
             import json
 
-            response = json.loads(responses[0].decode())
+            response = json.loads(responses[0].decode("utf-8"))
             assert response == complex_request
 
         finally:
@@ -432,7 +439,7 @@ class TestAsyncIntegrationScenarios:
     async def test_session_like_conversation(self):
         """Test a realistic session-like interaction pattern."""
         manager = AsyncPersistentProcessManager()
-        await manager.start(["cat"])
+        await manager.start(get_cat_command())
 
         try:
             # Simulate a conversation
@@ -448,7 +455,7 @@ class TestAsyncIntegrationScenarios:
             for msg in messages:
                 await manager.write_request(msg)
                 async for line in manager.read_lines(timeout=2.0):
-                    response = json.loads(line.decode())
+                    response = json.loads(line.decode("utf-8"))
                     responses.append(response)
                     break  # Only read one response per message
 
@@ -465,13 +472,13 @@ class TestAsyncIntegrationScenarios:
         manager = AsyncPersistentProcessManager()
 
         # First session
-        await manager.start(["cat"])
+        await manager.start(get_cat_command())
         await manager.write_request({"session": 1})
         await read_n_lines_async(manager, 1)
         await manager.stop()
 
         # Second session (should work)
-        await manager.start(["cat"])
+        await manager.start(get_cat_command())
         await manager.write_request({"session": 2})
         responses = await read_n_lines_async(manager, 1)
         assert len(responses) == 1
@@ -481,7 +488,7 @@ class TestAsyncIntegrationScenarios:
     async def test_graceful_shutdown_with_cleanup(self):
         """Test graceful shutdown and resource cleanup."""
         manager = AsyncPersistentProcessManager()
-        await manager.start(["cat"])
+        await manager.start(get_cat_command())
 
         # Do some work
         import json
@@ -490,7 +497,7 @@ class TestAsyncIntegrationScenarios:
             await manager.write_request({"id": i})
             responses = await read_n_lines_async(manager, 1)
             assert len(responses) == 1
-            assert json.loads(responses[0].decode())["id"] == i
+            assert json.loads(responses[0].decode("utf-8"))["id"] == i
 
         # Stop should cleanup cleanly
         await manager.stop()
@@ -507,7 +514,7 @@ class TestAsyncGeneratorBehavior:
     async def test_generator_can_be_closed_early(self):
         """Test that generator can be closed before consuming all lines."""
         manager = AsyncPersistentProcessManager()
-        await manager.start(["cat"])
+        await manager.start(get_cat_command())
 
         try:
             # Send request
@@ -530,7 +537,7 @@ class TestAsyncGeneratorBehavior:
     async def test_read_lines_with_timeout(self):
         """Test read_lines respects timeout parameter."""
         manager = AsyncPersistentProcessManager()
-        await manager.start(["cat"])
+        await manager.start(get_cat_command())
 
         try:
             await manager.write_request({"test": "timeout"})
