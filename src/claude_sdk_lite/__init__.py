@@ -33,7 +33,8 @@ Example (async):
 
 __version__ = "0.1.0"
 
-from .async_persistent_executor import PersistentProcessManager, AsyncPersistentProcessManager
+from .async_persistent_executor import AsyncPersistentProcessManager
+from .persistent_executor import PersistentProcessManager
 from .client import AsyncClaudeClient, ClaudeClient
 from .exceptions import (
     ClaudeSDKLiteError,
@@ -60,6 +61,7 @@ from .types import (
     ThinkingBlock,
     ToolResultBlock,
     ToolUseBlock,
+    UnknownMessage,
     UserMessage,
 )
 
@@ -87,6 +89,7 @@ __all__ = [
     "SystemMessage",
     "ResultMessage",
     "StreamEvent",
+    "UnknownMessage",
     # Content blocks
     "ContentBlock",
     "TextBlock",

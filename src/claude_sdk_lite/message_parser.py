@@ -15,6 +15,7 @@ from .types import (
     ThinkingBlock,
     ToolResultBlock,
     ToolUseBlock,
+    UnknownMessage,
     UserMessage,
 )
 
@@ -80,7 +81,9 @@ def parse_message(data: dict[str, Any] | str) -> Message:
             case "stream_event":
                 return _parse_stream_event(data)
             case _:
-                raise MessageParseError(f"Unknown message type: {message_type}", data)
+                # Return UnknownMessage for unrecognized types for forward compatibility
+                logger.debug(f"Unknown message type: {message_type}, returning UnknownMessage")
+                return UnknownMessage(type=message_type, raw_data=data)
     except KeyError as e:
         raise MessageParseError(
             f"Missing required field in {message_type} message: {e}", data

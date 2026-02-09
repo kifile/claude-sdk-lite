@@ -15,6 +15,7 @@ from claude_sdk_lite.types import (
     ThinkingBlock,
     ToolResultBlock,
     ToolUseBlock,
+    UnknownMessage,
     UserMessage,
 )
 
@@ -473,11 +474,13 @@ class TestParseErrors:
             parse_message(data)
 
     def test_parse_unknown_type(self):
-        """Test parsing message with unknown type raises error."""
+        """Test parsing message with unknown type returns UnknownMessage."""
         data = {"type": "unknown_type", "data": {}}
 
-        with pytest.raises(MessageParseError, match="Unknown message type"):
-            parse_message(data)
+        msg = parse_message(data)
+        assert isinstance(msg, UnknownMessage)
+        assert msg.type == "unknown_type"
+        assert msg.raw_data == data
 
     def test_parse_non_dict_data(self):
         """Test parsing non-dict data raises error."""

@@ -116,4 +116,33 @@ class StreamEvent(BaseModel):
     parent_tool_use_id: str | None = None
 
 
-Message = UserMessage | AssistantMessage | SystemMessage | ResultMessage | StreamEvent
+class UnknownMessage(BaseModel):
+    """Unknown message type for forward compatibility.
+
+    When encountering unrecognized message types, this allows the application
+    to continue processing instead of failing. Users can inspect the raw data
+    and decide how to handle these messages.
+
+    Example:
+        ```python
+        msg = UnknownMessage(
+            type="new_future_type",
+            raw_data={"field": "value"}
+        )
+        if isinstance(msg, UnknownMessage):
+            logger.warning(f"Unknown message type: {msg.type}")
+        ```
+    """
+
+    type: str
+    raw_data: dict[str, Any]
+
+
+Message = (
+    UserMessage
+    | AssistantMessage
+    | SystemMessage
+    | ResultMessage
+    | StreamEvent
+    | UnknownMessage
+)
