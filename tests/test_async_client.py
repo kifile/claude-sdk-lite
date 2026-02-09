@@ -7,6 +7,7 @@ with the new event-driven message handling.
 import asyncio
 
 import pytest
+from test_helpers import get_cat_command, get_echo_command
 
 from claude_sdk_lite import (
     AsyncClaudeClient,
@@ -20,7 +21,6 @@ from claude_sdk_lite.types import (
     AssistantMessage,
     TextBlock,
 )
-from test_helpers import get_cat_command, get_echo_command
 
 
 class TestAsyncClaudeClientInit:
@@ -345,13 +345,13 @@ class TestAsyncClaudeClientProperties:
         client = AsyncClaudeClient(message_handler=handler)
 
         # Use Python script to output to stderr and stdout
-        script = '''
+        script = """
 import sys
 import json
 sys.stderr.write("error message\\n")
 sys.stderr.flush()
 print(json.dumps({"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": False, "num_turns": 1, "session_id": "test"}))
-'''
+"""
         client._build_command = lambda: [sys.executable, "-c", script]
 
         await client.connect()

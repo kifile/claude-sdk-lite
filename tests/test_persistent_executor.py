@@ -7,15 +7,14 @@ import sys
 import time
 
 import pytest
-
-from claude_sdk_lite.persistent_executor import PersistentProcessManager
 from test_helpers import (
     get_cat_command,
     get_grep_command,
     get_head_command,
     get_true_command,
-    IS_WINDOWS,
 )
+
+from claude_sdk_lite.persistent_executor import PersistentProcessManager
 
 # ========== Helper Functions ==========
 

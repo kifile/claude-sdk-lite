@@ -1,22 +1,17 @@
 """Tests for process executors using real subprocess calls."""
 
 import json
-import platform
 
 import pytest
-
-from claude_sdk_lite.executors import AsyncProcessExecutor, SyncProcessExecutor
 from test_helpers import (
     IS_WINDOWS,
     create_error_command,
     create_json_command,
-    get_cat_command,
     get_false_command,
-    get_grep_command,
     get_seq_command,
-    get_shell_command,
 )
 
+from claude_sdk_lite.executors import AsyncProcessExecutor, SyncProcessExecutor
 
 # ========== SyncProcessExecutor Tests ==========
 
@@ -27,6 +22,7 @@ class TestSyncProcessExecutor:
     def test_execute_echo_command(self):
         """Test executing simple echo command."""
         import sys
+
         executor = SyncProcessExecutor()
         # Use Python script for cross-platform compatibility
         result = list(executor.execute([sys.executable, "-u", "-c", "print('hello world')"]))
@@ -80,13 +76,15 @@ class TestSyncProcessExecutor:
         assert "Custom error" in exc_info.value.stderr or "error" in exc_info.value.stderr.lower()
 
     def test_execute_cat_with_stdin(self):
-        """Test executing cat that reads from stdin (if supported)."""
+        """Test executing command that produces no output."""
+        import sys
+
         executor = SyncProcessExecutor()
-        # cat with no arguments just waits for stdin
-        # This should produce output only if we provide input
-        # Since we don't provide input, it will just exit
-        result = list(executor.execute(get_cat_command()))
-        # cat with no input will exit immediately
+        # Use Python script that produces no output
+        # This simulates a command that runs successfully but produces nothing
+        cmd = [sys.executable, "-c", "pass"]
+        result = list(executor.execute(cmd))
+        # Should produce no output
         assert len(result) == 0
 
     def test_execute_grep_command(self):
@@ -94,9 +92,6 @@ class TestSyncProcessExecutor:
         import sys
 
         executor = SyncProcessExecutor()
-        # Use Python script to filter input (cross-platform alternative to grep)
-        script = 'import sys; [print(line, end="") for line in sys.stdin if line.strip() == "test"]'
-        cmd = [sys.executable, "-c", script]
         # Since we can't pipe on Windows reliably, we'll skip the pipe test
         # and just test that the executor can run the Python script
         # We'll use a simpler test instead
@@ -121,11 +116,11 @@ class TestSyncProcessExecutor:
         executor = SyncProcessExecutor()
 
         # Use Python script with -u for unbuffered UTF-8 output
-        script = '''
+        script = """
 print("Hello")
 print("World")
 print("123")
-'''
+"""
         cmd = [sys.executable, "-u", "-c", script]
 
         result = list(executor.execute(cmd))
@@ -146,9 +141,12 @@ class TestAsyncProcessExecutor:
     async def test_async_execute_echo_command(self):
         """Test async executing simple echo command."""
         import sys
+
         executor = AsyncProcessExecutor()
         result = []
-        async for line in executor.async_execute([sys.executable, "-u", "-c", "print('async test')"]):
+        async for line in executor.async_execute(
+            [sys.executable, "-u", "-c", "print('async test')"]
+        ):
             result.append(line)
 
         assert len(result) == 1
@@ -230,11 +228,11 @@ class TestAsyncProcessExecutor:
         executor = AsyncProcessExecutor()
 
         # Use Python script with -u for unbuffered UTF-8 output
-        script = '''
+        script = """
 print("Test1")
 print("Data2")
 print("Emoji3")
-'''
+"""
         cmd = [sys.executable, "-u", "-c", script]
 
         result = []
@@ -329,6 +327,7 @@ class TestExecutorIntegration:
     def test_sync_executor_cleanup(self):
         """Test that sync executor properly cleans up processes."""
         import sys
+
         executor = SyncProcessExecutor()
 
         # Execute command that finishes
@@ -343,6 +342,7 @@ class TestExecutorIntegration:
     async def test_async_executor_cleanup(self):
         """Test that async executor properly cleans up processes."""
         import sys
+
         executor = AsyncProcessExecutor()
 
         async for _ in executor.async_execute([sys.executable, "-u", "-c", "print('test1')"]):

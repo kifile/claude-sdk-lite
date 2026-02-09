@@ -1,10 +1,10 @@
 """Pytest configuration file."""
 
-import pytest
-
 # Fix import path for test_helpers
 import sys
 from pathlib import Path
+
+import pytest
 
 # Add tests directory to path
 tests_dir = Path(__file__).parent

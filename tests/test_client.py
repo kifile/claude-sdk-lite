@@ -5,6 +5,7 @@ with the new event-driven message handling.
 """
 
 import pytest
+from test_helpers import get_cat_command, get_echo_command
 
 from claude_sdk_lite import (
     ClaudeClient,
@@ -12,7 +13,6 @@ from claude_sdk_lite import (
     DefaultMessageHandler,
     MessageEventListener,
 )
-from test_helpers import get_cat_command, get_echo_command, get_shell_command, IS_WINDOWS
 
 
 class TestClaudeClientInit:
@@ -273,13 +273,13 @@ class TestClaudeClientProperties:
         client = ClaudeClient(message_handler=handler)
 
         # Use Python script to output to stderr and stdout
-        script = '''
+        script = """
 import sys
 import json
 sys.stderr.write("error message\\n")
 sys.stderr.flush()
 print(json.dumps({"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": False, "num_turns": 1, "session_id": "test"}))
-'''
+"""
         client._build_command = lambda: [sys.executable, "-c", script]
 
         client.connect()

@@ -12,6 +12,7 @@ is_windows = IS_WINDOWS  # Alias for consistency
 
 # ========== Cross-Platform Command Helpers ==========
 
+
 def get_cat_command():
     """Get a command that reads from stdin and writes to stdout."""
     if IS_WINDOWS:
@@ -42,6 +43,7 @@ def get_false_command():
 def get_head_command(lines=1):
     """Get a command that reads N lines from stdin then exits."""
     import sys
+
     # Use Python script for cross-platform compatibility
     return [
         sys.executable,
@@ -67,6 +69,7 @@ def get_grep_command(pattern):
 def get_echo_command(text):
     """Get a command that outputs text."""
     import sys
+
     # Use Python script for cross-platform compatibility
     return [sys.executable, "-u", "-c", f"print('{text}')"]
 
@@ -74,6 +77,7 @@ def get_echo_command(text):
 def get_echo_command_args():
     """Get a command that outputs arguments (for testing echo with args)."""
     import sys
+
     # Use Python script that prints all arguments
     return [sys.executable, "-u", "-c", "import sys; print(' '.join(sys.argv[1:]))"]
 
@@ -229,12 +233,12 @@ def skip_if_windows_unless(condition=True):
         condition: If True, test runs on all platforms. If False, skipped on Windows.
     """
     return pytest.mark.skipif(
-        IS_WINDOWS and not condition,
-        reason="Test not compatible with Windows"
+        IS_WINDOWS and not condition, reason="Test not compatible with Windows"
     )
 
 
 # ========== Pytest fixtures ==========
+
 
 @pytest.fixture
 def is_windows():

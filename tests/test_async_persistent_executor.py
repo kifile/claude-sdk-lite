@@ -7,14 +7,14 @@ import asyncio
 import sys
 
 import pytest
-
-from claude_sdk_lite.async_persistent_executor import AsyncPersistentProcessManager
 from test_helpers import (
     get_cat_command,
     get_grep_command,
     get_head_command,
     get_true_command,
 )
+
+from claude_sdk_lite.async_persistent_executor import AsyncPersistentProcessManager
 
 # ========== Helper Functions ==========
 
