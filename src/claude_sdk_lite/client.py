@@ -1,16 +1,19 @@
 """Session-based client for continuous conversations with Claude Code.
 
-This module provides a client that maintains session context across multiple queries,
+This module provides clients that maintain session context across multiple queries,
 using a persistent subprocess with stdin/stdout communication.
+
+Both synchronous and asynchronous implementations are provided.
 """
 
 import json
 import logging
 import os
 import uuid
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
+from claude_sdk_lite.async_persistent_executor import AsyncPersistentProcessManager
 from claude_sdk_lite.message_parser import MessageParseError, parse_message
 from claude_sdk_lite.options import ClaudeOptions
 from claude_sdk_lite.persistent_executor import PersistentProcessManager
@@ -189,8 +192,7 @@ class ClaudeClient:
             "session_id": self.session_id,
         }
 
-        if self._debug:
-            logger.debug("Sending message via stdin: %s", message)
+        self._log_debug("Sending message via stdin: %s", message)
 
         # Send message via stdin
         self._manager.write_request(message)
@@ -198,8 +200,7 @@ class ClaudeClient:
         # Read response from stdout
         message_count = 0
         for line in self._manager.read_lines(timeout=60.0):
-            if self._debug:
-                logger.debug("Received line: %d bytes", len(line))
+            self._log_debug("Received line: %d bytes", len(line))
 
             line_str = line.decode().strip()
             if not line_str:
@@ -208,33 +209,28 @@ class ClaudeClient:
             try:
                 # Parse JSON line
                 data = json.loads(line_str)
-                if self._debug:
-                    logger.debug("Parsed: %s", data.get("type", "unknown"))
+                self._log_debug("Parsed: %s", data.get("type", "unknown"))
 
                 message = parse_message(data)
                 message_count += 1
-                if self._debug:
-                    type_name = type(message).__name__
-                    logger.debug("Message #%d: type=%s", message_count, type_name)
+                type_name = type(message).__name__
+                self._log_debug("Message #%d: type=%s", message_count, type_name)
 
                 # Yield the message
                 yield message
 
                 # If this is a result message, we're done
                 if isinstance(message, ResultMessage):
-                    if self._debug:
-                        logger.debug("Result received, ending stream")
+                    self._log_debug("Result received, ending stream")
                     break
 
             except (json.JSONDecodeError, MessageParseError) as e:
-                if self._debug:
-                    logger.debug("Parse error: %s", e)
-                    logger.debug("Line: %s", line_str[:200])
+                self._log_debug("Parse error: %s", e)
+                self._log_debug("Line: %s", line_str[:200])
                 logger.debug("Failed to parse message: %s", e)
                 continue
 
-        if self._debug:
-            logger.debug("Query completed: %d messages", message_count)
+        self._log_debug("Query completed: %d messages", message_count)
 
     def interrupt(self) -> None:
         """Send interrupt signal via stdin.
@@ -302,3 +298,312 @@ class ClaudeClient:
             result["env"] = {**os.environ, **self.options.env}
 
         return result
+
+    def _log_debug(self, message: str, *args: Any) -> None:
+        """Log debug message only if debug mode is enabled.
+
+        This avoids the overhead of string formatting when debug is off.
+
+        Args:
+            message: The log message format string
+            *args: Arguments for string formatting
+        """
+        if self._debug:
+            logger.debug(message, *args)
+
+
+class AsyncClaudeClient:
+    """Asynchronous client for continuous conversations with Claude Code.
+
+    This client maintains a persistent subprocess connection, allowing multiple
+    queries to be sent over the same session via stdin/stdout communication.
+    All methods are async and use asyncio for non-blocking operation.
+
+    Example:
+        ```python
+        from claude_sdk_lite import AsyncClaudeClient, ClaudeOptions
+
+        # Using async context manager (recommended)
+        async with AsyncClaudeClient(options=ClaudeOptions(model="sonnet")) as client:
+            # Stream responses
+            async for msg in client.query_stream("What is the capital of France?"):
+                print(msg)
+
+            # Or get complete response
+            messages = await client.query("What about Germany?")
+            for msg in messages:
+                print(msg)
+
+        # Manual connect/disconnect
+        client = AsyncClaudeClient()
+        await client.connect()
+        try:
+            messages = await client.query("Hello")
+            for msg in messages:
+                print(msg)
+        finally:
+            await client.disconnect()
+        ```
+
+    Args:
+        options: Configuration options for the Claude Code CLI.
+                 If None, uses default options. A session_id will be
+                 auto-generated if not specified.
+
+    Attributes:
+        session_id: The unique session identifier for this conversation.
+        options: The ClaudeOptions used for this session.
+    """
+
+    def __init__(self, options: ClaudeOptions | None = None):
+        """Initialize the async client.
+
+        Args:
+            options: Optional configuration. If not provided, defaults
+                     will be used. A session_id will be generated if
+                     not specified in options.
+        """
+        self.options = options or ClaudeOptions()
+
+        # Generate session_id if not provided
+        if not self.options.session_id:
+            self.session_id = str(uuid.uuid4())
+            self.options = self.options.model_copy(update={"session_id": self.session_id})
+        else:
+            self.session_id = self.options.session_id
+
+        # Persistent process manager
+        self._manager = AsyncPersistentProcessManager()
+
+        # Cache debug flag
+        self._debug = os.environ.get("CLAUDE_SDK_DEBUG", "false").lower() == "true"
+
+    @property
+    def is_connected(self) -> bool:
+        """Check if the client is currently connected.
+
+        Returns:
+            True if connected, False otherwise.
+        """
+        return self._manager.is_alive()
+
+    async def __aenter__(self) -> "AsyncClaudeClient":
+        """Enter async context manager - auto-starts persistent process.
+
+        Returns:
+            The connected client instance.
+        """
+        await self.connect()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Exit async context manager - auto-stops persistent process."""
+        _ = exc_type, exc_val, exc_tb  # Unused
+        await self.disconnect()
+
+    async def connect(self) -> None:
+        """Start persistent subprocess for session-based interaction.
+
+        Raises:
+            CLINotFoundError: If the Claude Code CLI is not found.
+            RuntimeError: If already connected.
+        """
+        if self._manager.is_alive():
+            return
+
+        # Build command with stream-json input/output
+        cmd = self._build_command()
+        kwargs = self._build_subprocess_kwargs()
+
+        # Start persistent process
+        await self._manager.start(cmd, **kwargs)
+
+    async def disconnect(self) -> None:
+        """Stop persistent subprocess and cleanup resources."""
+        await self._manager.stop()
+
+    async def query(self, prompt: str) -> list[Message]:
+        """Send a query and return complete list of messages.
+
+        This is a convenience method that collects all messages into a list.
+        Use query_stream() for streaming responses.
+
+        Args:
+            prompt: The user prompt to send.
+
+        Returns:
+            List of Message objects from the conversation.
+
+        Raises:
+            RuntimeError: If the client is not connected.
+
+        Example:
+            ```python
+            async with AsyncClaudeClient() as client:
+                messages = await client.query("What is 2+2?")
+                for msg in messages:
+                    print(msg)
+            ```
+        """
+        messages = []
+        async for message in self.query_stream(prompt):
+            messages.append(message)
+        return messages
+
+    async def query_stream(self, prompt: str) -> AsyncIterator[Message]:
+        """Send a query and stream messages from the response.
+
+        This method sends the query via stdin to the persistent process
+        and streams responses from stdout.
+
+        Args:
+            prompt: The user prompt to send.
+
+        Yields:
+            Message objects from the conversation, including AssistantMessage,
+            SystemMessage, and finally ResultMessage.
+
+        Raises:
+            RuntimeError: If the client is not connected.
+
+        Example:
+            ```python
+            async with AsyncClaudeClient() as client:
+                async for message in client.query_stream("What is 2+2?"):
+                    if isinstance(message, AssistantMessage):
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                print(block.text)
+            ```
+        """
+        if not self._manager.is_alive():
+            raise RuntimeError(
+                "Client not connected. Call connect() first or use async context manager."
+            )
+
+        # Prepare user message in JSON format
+        message = {
+            "type": "user",
+            "message": {"role": "user", "content": prompt},
+            "session_id": self.session_id,
+        }
+
+        self._log_debug("Sending message via stdin: %s", message)
+
+        # Send message via stdin
+        await self._manager.write_request(message)
+
+        # Read response from stdout
+        message_count = 0
+        async for line in self._manager.read_lines(timeout=60.0):
+            self._log_debug("Received line: %d bytes", len(line))
+
+            line_str = line.decode().strip()
+            if not line_str:
+                continue
+
+            try:
+                # Parse JSON line
+                data = json.loads(line_str)
+                self._log_debug("Parsed: %s", data.get("type", "unknown"))
+
+                message = parse_message(data)
+                message_count += 1
+                type_name = type(message).__name__
+                self._log_debug("Message #%d: type=%s", message_count, type_name)
+
+                # Yield the message
+                yield message
+
+                # If this is a result message, we're done
+                if isinstance(message, ResultMessage):
+                    self._log_debug("Result received, ending stream")
+                    break
+
+            except (json.JSONDecodeError, MessageParseError) as e:
+                self._log_debug("Parse error: %s", e)
+                self._log_debug("Line: %s", line_str[:200])
+                logger.debug("Failed to parse message: %s", e)
+                continue
+
+        self._log_debug("Query completed: %d messages", message_count)
+
+    async def interrupt(self) -> None:
+        """Send interrupt signal via stdin.
+
+        This sends an interrupt control request to the Claude CLI,
+        which will interrupt the currently running operation.
+
+        Raises:
+            RuntimeError: If the client is not connected.
+        """
+        if not self._manager.is_alive():
+            raise RuntimeError(
+                "Client not connected. Call connect() first or use async context manager."
+            )
+
+        await self._manager.write_interrupt()
+
+    async def get_stderr(self) -> list[str]:
+        """Get captured stderr output.
+
+        Returns:
+            List of stderr lines captured during execution.
+        """
+        return await self._manager.get_stderr()
+
+    def _build_command(self) -> list[str]:
+        """Build the command list for persistent subprocess.
+
+        Returns:
+            List of command arguments.
+
+        Note:
+            This uses --input-format stream-json for stdin communication,
+            but does NOT use --print mode (which would exit immediately).
+        """
+        # Use options to build base command
+        cmd = self.options.build_command()
+
+        # Add stream-json input/output format
+        # Note: We do NOT use --print mode, which would exit after one query
+        # Instead, we use --input-format stream-json to read from stdin
+        cmd.extend(
+            [
+                "--output-format",
+                "stream-json",
+                "--input-format",
+                "stream-json",
+                "--verbose",
+            ]
+        )
+
+        return cmd
+
+    def _build_subprocess_kwargs(self) -> dict[str, Any]:
+        """Build subprocess keyword arguments.
+
+        Returns:
+            Dictionary of kwargs for asyncio.create_subprocess_exec().
+        """
+        result: dict[str, Any] = {}
+
+        if self.options.working_dir:
+            result["cwd"] = str(self.options.working_dir)
+
+        if self.options.env:
+            result["env"] = {**os.environ, **self.options.env}
+
+        return result
+
+    def _log_debug(self, message: str, *args: Any) -> None:
+        """Log debug message only if debug mode is enabled.
+
+        This avoids the overhead of string formatting when debug is off.
+
+        Args:
+            message: The log message format string
+            *args: Arguments for string formatting
+        """
+        if self._debug:
+            logger.debug(message, *args)
