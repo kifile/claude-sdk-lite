@@ -88,7 +88,8 @@ class AsyncPersistentProcessManager:
 
         # Condition variable for initialization synchronization
         # Allows stop() to efficiently wait for start() to complete
-        self._init_cond = asyncio.Condition(self._lock)
+        # Note: Not sharing lock to avoid deadlock
+        self._init_cond = asyncio.Condition()
 
         # Initialization flag to prevent race conditions during start()
         self._initializing = False
@@ -122,6 +123,10 @@ class AsyncPersistentProcessManager:
             self._initializing = True
 
             try:
+                # Create new session to prevent Ctrl+C from being forwarded to subprocess
+                kwargs = kwargs.copy()
+                kwargs["start_new_session"] = True
+
                 # Start process with stdin for bidirectional communication
                 self._process = await asyncio.create_subprocess_exec(
                     *cmd,
@@ -166,7 +171,8 @@ class AsyncPersistentProcessManager:
             finally:
                 # Clear initialization flag and notify waiting tasks
                 self._initializing = False
-                self._init_cond.notify_all()
+                async with self._init_cond:
+                    self._init_cond.notify_all()
 
     async def stop(self) -> None:
         """Stop persistent subprocess and cleanup resources.
@@ -180,8 +186,8 @@ class AsyncPersistentProcessManager:
 
         This method is safe to call multiple times.
         """
+        # Wait for initialization to complete if in progress
         async with self._init_cond:
-            # Wait for initialization to complete if in progress
             wait_start = asyncio.get_event_loop().time()
             while self._initializing:
                 remaining = MAX_INITIALIZATION_WAIT_TIME - (
@@ -198,55 +204,35 @@ class AsyncPersistentProcessManager:
                 except asyncio.TimeoutError:
                     break
 
+        # Use lock for cleanup to prevent race conditions
+        async with self._lock:
             if self._process is None:
                 return
 
+            # Capture references to use outside lock
+            process = self._process
+            stop_event = self._stop_event
+            stdin_queue = self._stdin_queue
+            stdin_task = self._stdin_task
+            stdout_task = self._stdout_task
+            stderr_task = self._stderr_task
+
             # Signal tasks to stop
-            if self._stop_event:
-                self._stop_event.set()
+            if stop_event:
+                stop_event.set()
 
-            # Signal stdin writer to stop
-            if self._stdin_queue:
-                try:
-                    self._stdin_queue.put_nowait(None)
-                except asyncio.QueueFull:
-                    self._log_debug("Failed to send shutdown signal to stdin writer (queue full)")
-
-            # Cleanup process FIRST
-            await self._cleanup()
-
-            # Wait for tasks to finish
-            if self._stdin_task and not self._stdin_task.done():
-                try:
-                    await asyncio.wait_for(self._stdin_task, timeout=TASK_WAIT_TIMEOUT)
-                except asyncio.TimeoutError:
-                    self._stdin_task.cancel()
+            # Signal stdin writer to stop with retry
+            if stdin_queue:
+                for attempt in range(3):
                     try:
-                        await self._stdin_task
-                    except asyncio.CancelledError:
-                        pass
+                        stdin_queue.put_nowait(None)
+                        break
+                    except asyncio.QueueFull:
+                        if attempt == 2:
+                            logger.error("Failed to send shutdown signal after 3 attempts")
+                        await asyncio.sleep(0.1)
 
-            if self._stdout_task and not self._stdout_task.done():
-                try:
-                    await asyncio.wait_for(self._stdout_task, timeout=TASK_WAIT_TIMEOUT)
-                except asyncio.TimeoutError:
-                    self._stdout_task.cancel()
-                    try:
-                        await self._stdout_task
-                    except asyncio.CancelledError:
-                        pass
-
-            if self._stderr_task and not self._stderr_task.done():
-                try:
-                    await asyncio.wait_for(self._stderr_task, timeout=TASK_WAIT_TIMEOUT)
-                except asyncio.TimeoutError:
-                    self._stderr_task.cancel()
-                    try:
-                        await self._stderr_task
-                    except asyncio.CancelledError:
-                        pass
-
-            # Clear references
+            # Clear references first
             self._process = None
             self._stdin_queue = None
             self._line_queue = None
@@ -257,6 +243,32 @@ class AsyncPersistentProcessManager:
             self._stderr_task = None
             self._stderr_buffer = []
             self._stderr_lock = None
+
+        # Cleanup process (outside lock to avoid blocking other operations)
+        if process and process.returncode is None:
+            try:
+                process.terminate()
+                await asyncio.wait_for(process.wait(), timeout=PROCESS_WAIT_TIMEOUT)
+            except asyncio.TimeoutError:
+                try:
+                    process.kill()
+                    await process.wait()
+                except Exception as e:
+                    self._log_debug("Error killing subprocess: %s", e)
+            except Exception as e:
+                self._log_debug("Error terminating subprocess: %s", e)
+
+        # Wait for tasks to finish (outside lock)
+        for task in [stdin_task, stdout_task, stderr_task]:
+            if task and not task.done():
+                try:
+                    await asyncio.wait_for(task, timeout=TASK_WAIT_TIMEOUT)
+                except asyncio.TimeoutError:
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
 
     async def write_request(self, request: dict[str, Any]) -> None:
         """Write a request to subprocess stdin.
@@ -580,7 +592,7 @@ class AsyncPersistentProcessManager:
         try:
             self._process.terminate()
             await asyncio.wait_for(self._process.wait(), timeout=PROCESS_WAIT_TIMEOUT)
-        except asyncio.TimeoutExpired:
+        except asyncio.TimeoutError:
             try:
                 self._process.kill()
                 await self._process.wait()

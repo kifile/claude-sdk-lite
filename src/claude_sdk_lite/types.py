@@ -139,10 +139,5 @@ class UnknownMessage(BaseModel):
 
 
 Message = (
-    UserMessage
-    | AssistantMessage
-    | SystemMessage
-    | ResultMessage
-    | StreamEvent
-    | UnknownMessage
+    UserMessage | AssistantMessage | SystemMessage | ResultMessage | StreamEvent | UnknownMessage
 )

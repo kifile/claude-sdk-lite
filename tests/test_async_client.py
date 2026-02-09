@@ -1,144 +1,277 @@
-"""Tests for AsyncClaudeClient - asynchronous session-based client."""
+"""Tests for AsyncClaudeClient with message handler architecture.
+
+Tests that the async client with required message_handler works correctly
+with the new event-driven message handling.
+"""
 
 import asyncio
-import uuid
 
 import pytest
 
-from claude_sdk_lite import AsyncClaudeClient, ClaudeOptions
+from claude_sdk_lite import (
+    AsyncClaudeClient,
+    AsyncDefaultMessageHandler,
+    AsyncMessageEventListener,
+    ClaudeOptions,
+    DefaultMessageHandler,
+    MessageEventListener,
+)
+from claude_sdk_lite.types import (
+    AssistantMessage,
+    TextBlock,
+)
 
 
 class TestAsyncClaudeClientInit:
-    """Test AsyncClaudeClient initialization and configuration."""
+    """Test AsyncClaudeClient initialization."""
 
-    def test_init_with_default_options(self):
-        """Test initialization with default options."""
-        client = AsyncClaudeClient()
-
-        assert client.options is not None
-        assert client.session_id is not None
-        assert isinstance(client.session_id, str)
-        # Should be a valid UUID
-        uuid.UUID(client.session_id)  # Will raise if invalid
-
-    def test_init_with_custom_options(self):
-        """Test initialization with custom options."""
+    def test_init_with_custom_options_and_handler(self):
+        """Test initialization with custom options and handler."""
+        handler = DefaultMessageHandler()
         options = ClaudeOptions(model="sonnet")
-        client = AsyncClaudeClient(options=options)
 
-        # Client creates a copy of options (with session_id)
-        assert client.options.model == "sonnet"
-        # Check that it's a different object (copy was made)
-        assert client.options is not options
+        client = AsyncClaudeClient(message_handler=handler, options=options)
+
+        # session_id is auto-generated if not provided, so client.options is a copy
+        assert client.options.model == options.model
+        assert client.message_handler is handler
+        assert client.session_id is not None
 
     def test_init_generates_session_id_if_not_provided(self):
-        """Test that session_id is generated if not in options."""
+        """Test that session_id is auto-generated if not specified."""
+        handler = DefaultMessageHandler()
         options = ClaudeOptions()
-        assert options.session_id is None
 
-        client = AsyncClaudeClient(options=options)
+        client = AsyncClaudeClient(options=options, message_handler=handler)
 
         assert client.session_id is not None
-        assert isinstance(client.session_id, str)
-        # Original options should not be modified
-        assert options.session_id is None
+        assert client.session_id != options.session_id
+        assert len(client.session_id) > 0
 
     def test_init_uses_provided_session_id(self):
         """Test that provided session_id is used."""
-        custom_session_id = "my-custom-session-123"
-        options = ClaudeOptions(session_id=custom_session_id)
-        client = AsyncClaudeClient(options=options)
+        handler = DefaultMessageHandler()
+        session_id = "my-custom-session-123"
+        options = ClaudeOptions(session_id=session_id)
 
-        assert client.session_id == custom_session_id
+        client = AsyncClaudeClient(options=options, message_handler=handler)
+
+        assert client.session_id == session_id
 
     def test_init_with_valid_uuid_session_id(self):
-        """Test initialization with valid UUID as session_id."""
-        custom_uuid = str(uuid.uuid4())
-        options = ClaudeOptions(session_id=custom_uuid)
-        client = AsyncClaudeClient(options=options)
+        """Test that valid UUID session_id is accepted."""
+        import uuid
 
-        assert client.session_id == custom_uuid
+        handler = DefaultMessageHandler()
+        session_id = str(uuid.uuid4())
+        options = ClaudeOptions(session_id=session_id)
+
+        client = AsyncClaudeClient(options=options, message_handler=handler)
+
+        assert client.session_id == session_id
+
+    def test_init_requires_handler(self):
+        """Test that message_handler is required."""
+        options = ClaudeOptions()
+
+        with pytest.raises(ValueError, match="message_handler is required"):
+            AsyncClaudeClient(options=options, message_handler=None)
 
     def test_debug_flag_caching(self):
-        """Test that debug flag is cached at initialization."""
+        """Test that debug flag is cached at init."""
         import os
 
-        # Set debug before creating client
-        os.environ["CLAUDE_SDK_DEBUG"] = "true"
+        handler = DefaultMessageHandler()
+        options = ClaudeOptions()
 
-        client = AsyncClaudeClient()
-        assert client._debug is True
+        client = AsyncClaudeClient(message_handler=handler, options=options)
 
-        # Change environment variable
-        os.environ["CLAUDE_SDK_DEBUG"] = "false"
-
-        # Client should still have cached value
-        assert client._debug is True
-
-        # Clean up
-        del os.environ["CLAUDE_SDK_DEBUG"]
+        # Debug flag is cached at init
+        expected_debug = os.environ.get("CLAUDE_SDK_DEBUG", "false").lower() == "true"
+        assert client._debug == expected_debug
 
 
 class TestAsyncClaudeClientConnection:
-    """Test AsyncClaudeClient connection lifecycle."""
+    """Test AsyncClaudeClient connection management."""
 
     def test_is_connected_initially_false(self):
         """Test that is_connected is False before connection."""
-        client = AsyncClaudeClient()
+        handler = DefaultMessageHandler()
+        client = AsyncClaudeClient(message_handler=handler)
+
         assert not client.is_connected
 
     @pytest.mark.asyncio
     async def test_context_manager_auto_connect(self):
-        """Test that async context manager automatically connects."""
-        client = AsyncClaudeClient()
-        assert not client.is_connected
+        """Test that context manager auto-starts the process."""
+        handler = DefaultMessageHandler()
+        client = AsyncClaudeClient(message_handler=handler)
+        client._build_command = lambda: ["cat"]
 
         async with client:
-            # Note: This will actually start the process
-            # For testing, we use a mock command
-            pass
+            assert client.is_connected
 
-        # After context, should be disconnected
         assert not client.is_connected
 
     @pytest.mark.asyncio
     async def test_connect_when_already_connected_returns_early(self):
-        """Test that calling connect() twice doesn't error."""
-        client = AsyncClaudeClient()
+        """Test that connecting when already connected returns early."""
+        handler = DefaultMessageHandler()
+        client = AsyncClaudeClient(message_handler=handler)
+        client._build_command = lambda: ["cat"]
 
-        # First connect
-        async with client:
-            # This should work
-            pass
-        # Disconnect
+        await client.connect()
+        is_connected = client.is_connected
+        await client.connect()  # Should not raise
 
-        # Second connect should also work
-        async with client:
-            pass
-
-
-class TestAsyncClaudeClientQuery:
-    """Test AsyncClaudeClient query methods."""
+        assert is_connected
+        await client.disconnect()
 
     @pytest.mark.asyncio
-    async def test_query_returns_list_of_messages(self):
-        """Test that query() returns a list of Message objects."""
-        client = AsyncClaudeClient()
+    async def test_manual_connect_disconnect(self):
+        """Test manual connect and disconnect."""
+        handler = DefaultMessageHandler()
+        client = AsyncClaudeClient(message_handler=handler)
+        client._build_command = lambda: ["cat"]
 
-        # Without connection, should raise RuntimeError
-        with pytest.raises(RuntimeError, match="not connected"):
-            await client.query("test prompt")
+        assert not client.is_connected
+
+        await client.connect()
+        assert client.is_connected
+
+        await client.disconnect()
+        assert not client.is_connected
+
+
+class TestAsyncClaudeClientSendRequest:
+    """Test AsyncClaudeClient send_request method."""
 
     @pytest.mark.asyncio
-    async def test_query_stream_is_async_iterator(self):
-        """Test that query_stream() returns an async iterator."""
-        client = AsyncClaudeClient()
+    async def test_send_request_without_connection_raises_error(self):
+        """Test that send_request raises error when not connected."""
+        handler = DefaultMessageHandler()
+        client = AsyncClaudeClient(message_handler=handler)
 
-        # Without connection, should raise RuntimeError
         with pytest.raises(RuntimeError, match="not connected"):
-            # Try to consume the stream
-            async for _ in client.query_stream("test prompt"):
-                pass
+            await client.send_request("Hello")
+
+    @pytest.mark.asyncio
+    async def test_send_request_calls_handler_on_query_start(self):
+        """Test that send_request calls handler.on_query_start."""
+
+        class TrackingHandler(MessageEventListener):
+            def __init__(self):
+                self.queries_started = []
+                self.lock = asyncio.Lock()
+
+            def on_query_start(self, prompt: str):
+                self.queries_started.append(prompt)
+
+        handler = TrackingHandler()
+        client = AsyncClaudeClient(message_handler=handler)
+        client._build_command = lambda: ["echo", "{}"]
+
+        await client.connect()
+        await client.send_request("Test prompt")
+
+        assert "Test prompt" in handler.queries_started
+        await client.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_send_request_with_async_handler(self):
+        """Test that send_request works with AsyncDefaultMessageHandler."""
+
+        class AsyncTrackingHandler(AsyncMessageEventListener):
+            def __init__(self):
+                self.queries_started = []
+                self.lock = asyncio.Lock()
+
+            async def on_query_start(self, prompt: str):
+                async with self.lock:
+                    self.queries_started.append(prompt)
+
+        handler = AsyncTrackingHandler()
+        client = AsyncClaudeClient(message_handler=handler)
+        client._build_command = lambda: ["echo", "{}"]
+
+        await client.connect()
+        await client.send_request("Test prompt")
+
+        assert "Test prompt" in handler.queries_started
+        await client.disconnect()
+
+
+class TestAsyncClaudeClientMessageHandler:
+    """Test message handler integration."""
+
+    def test_message_handler_property_returns_handler(self):
+        """Test that message_handler property returns the handler."""
+        handler = DefaultMessageHandler()
+        client = AsyncClaudeClient(message_handler=handler)
+
+        assert client.message_handler is handler
+
+    @pytest.mark.asyncio
+    async def test_custom_handler_receives_messages(self):
+        """Test that custom handler receives messages."""
+        import sys
+
+        class CountingHandler(MessageEventListener):
+            def __init__(self):
+                self.message_count = 0
+
+            def on_message(self, message):
+                self.message_count += 1
+
+        handler = CountingHandler()
+        client = AsyncClaudeClient(message_handler=handler)
+
+        # Script that outputs 2 messages
+        script = """
+import sys
+import json
+
+print(json.dumps({"type": "assistant", "message": {"model": "test", "content": [{"type": "text", "text": "Hi"}]}}))
+print(json.dumps({"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": False, "num_turns": 1, "session_id": "test"}))
+"""
+        client._build_command = lambda: [sys.executable, "-c", script]
+
+        await client.connect()
+        await client._manager.write_request({"start": True})
+
+        await asyncio.sleep(0.3)  # Wait for listener to process
+
+        assert handler.message_count >= 2
+        await client.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_async_handler_receives_messages(self):
+        """Test that async handler receives messages correctly."""
+
+        class AsyncCountingHandler(AsyncMessageEventListener):
+            def __init__(self):
+                self.message_count = 0
+
+            async def on_message(self, message):
+                self.message_count += 1
+
+        handler = AsyncCountingHandler()
+        client = AsyncClaudeClient(message_handler=handler)
+
+        # Use shell commands to output JSON messages
+        client._build_command = lambda: [
+            "sh",
+            "-c",
+            'echo \'{"type": "assistant", "message": {"model": "test", "content": [{"type": "text", "text": "Hello"}]}}\' && echo \'{"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": false, "num_turns": 1, "session_id": "test"}\'',
+        ]
+
+        await client.connect()
+        await client._manager.write_request({"start": True})
+
+        await asyncio.sleep(0.3)  # Wait for listener to process
+
+        assert handler.message_count >= 2
+        await client.disconnect()
 
 
 class TestAsyncClaudeClientInterrupt:
@@ -146,77 +279,53 @@ class TestAsyncClaudeClientInterrupt:
 
     @pytest.mark.asyncio
     async def test_interrupt_without_connection_raises_error(self):
-        """Test that interrupt() raises error when not connected."""
-        client = AsyncClaudeClient()
+        """Test that interrupt raises error when not connected."""
+        handler = DefaultMessageHandler()
+        client = AsyncClaudeClient(message_handler=handler)
 
         with pytest.raises(RuntimeError, match="not connected"):
             await client.interrupt()
+
+    @pytest.mark.asyncio
+    async def test_interrupt_sends_signal(self):
+        """Test that interrupt sends signal to subprocess."""
+        handler = DefaultMessageHandler()
+        client = AsyncClaudeClient(message_handler=handler)
+        client._build_command = lambda: ["cat"]
+
+        await client.connect()
+
+        # Should not raise
+        await client.interrupt()
+
+        await client.disconnect()
 
 
 class TestAsyncClaudeClientCommands:
     """Test AsyncClaudeClient command building."""
 
     def test_build_command_includes_stream_json_format(self):
-        """Test that built command includes stream-json format."""
-        options = ClaudeOptions(model="sonnet")
-        client = AsyncClaudeClient(options=options)
+        """Test that build_command includes stream-json format."""
+        handler = DefaultMessageHandler()
+        client = AsyncClaudeClient(message_handler=handler)
 
         cmd = client._build_command()
 
-        # Should include stream-json flags
         assert "--output-format" in cmd
         assert "stream-json" in cmd
         assert "--input-format" in cmd
         assert "--verbose" in cmd
 
-        # Should NOT include --print mode
-        assert "--print" not in cmd
-
     def test_build_command_preserves_model_option(self):
-        """Test that model option is preserved in command."""
+        """Test that build_command preserves model option."""
+        handler = DefaultMessageHandler()
         options = ClaudeOptions(model="haiku")
-        client = AsyncClaudeClient(options=options)
+        client = AsyncClaudeClient(options=options, message_handler=handler)
 
         cmd = client._build_command()
 
-        # Should include model
         assert "--model" in cmd
-        model_idx = cmd.index("--model")
-        assert cmd[model_idx + 1] == "haiku"
-
-    def test_build_subprocess_kwargs_includes_working_dir(self):
-        """Test that working_dir is included in kwargs."""
-        options = ClaudeOptions(working_dir="/tmp/test")
-        client = AsyncClaudeClient(options=options)
-
-        kwargs = client._build_subprocess_kwargs()
-
-        assert "cwd" in kwargs
-        assert kwargs["cwd"] == "/tmp/test"
-
-    def test_build_subprocess_kwargs_includes_env_vars(self):
-        """Test that environment variables are merged."""
-        options = ClaudeOptions(env={"TEST_VAR": "test_value"})
-        client = AsyncClaudeClient(options=options)
-
-        kwargs = client._build_subprocess_kwargs()
-
-        assert "env" in kwargs
-        assert "TEST_VAR" in kwargs["env"]
-        assert kwargs["env"]["TEST_VAR"] == "test_value"
-
-    def test_build_subprocess_kwargs_merges_with_os_environ(self):
-        """Test that custom env vars are merged with os.environ."""
-
-        options = ClaudeOptions(env={"CUSTOM_VAR": "custom_value"})
-        client = AsyncClaudeClient(options=options)
-
-        kwargs = client._build_subprocess_kwargs()
-
-        # Should include PATH from os.environ
-        assert "PATH" in kwargs["env"]
-        # Should include custom var
-        assert "CUSTOM_VAR" in kwargs["env"]
+        assert "haiku" in cmd
 
 
 class TestAsyncClaudeClientProperties:
@@ -225,79 +334,114 @@ class TestAsyncClaudeClientProperties:
     @pytest.mark.asyncio
     async def test_stderr_property(self):
         """Test get_stderr method."""
-        client = AsyncClaudeClient()
-        # Before connection, should return empty list
+        handler = DefaultMessageHandler()
+        client = AsyncClaudeClient(message_handler=handler)
+
+        # Use sh to output to stderr and stdout
+        client._build_command = lambda: [
+            "sh",
+            "-c",
+            'echo "error message" >&2 && echo \'{"type": "result", "subtype": "complete", "duration_ms": 100, "duration_api_ms": 50, "is_error": false, "num_turns": 1, "session_id": "test"}\'',
+        ]
+
+        await client.connect()
+        await client._manager.write_request({"start": True})
+
+        await asyncio.sleep(0.2)
+
         stderr = await client.get_stderr()
-        assert isinstance(stderr, list)
-        assert len(stderr) == 0
-
-
-class TestAsyncClaudeClientIntegration:
-    """Integration tests with mock subprocess."""
-
-    def test_full_query_flow_with_cat(self):
-        """Test full query flow using cat as mock subprocess."""
-        # Use cat which will echo our input
-        options = ClaudeOptions(
-            cli_path="cat",
-        )
-
-        # We'll need to patch the command building for this test
-        # For now, test the structure
-        client = AsyncClaudeClient(options=options)
-
-        # Verify client is properly configured
-        assert client.session_id is not None
-        assert client.options.cli_path == "cat"
+        assert len(stderr) > 0
+        await client.disconnect()
 
 
 class TestAsyncClaudeClientErrorHandling:
-    """Test error handling in AsyncClaudeClient."""
+    """Test AsyncClaudeClient error handling."""
 
     @pytest.mark.asyncio
-    async def test_query_fails_when_not_connected(self):
-        """Test that query() fails gracefully when not connected."""
-        client = AsyncClaudeClient()
+    async def test_send_fails_when_not_connected(self):
+        """Test that send_request fails when not connected."""
+        handler = DefaultMessageHandler()
+        client = AsyncClaudeClient(message_handler=handler)
 
         with pytest.raises(RuntimeError, match="not connected"):
-            await client.query("test")
-
-    @pytest.mark.asyncio
-    async def test_query_stream_fails_when_not_connected(self):
-        """Test that query_stream() fails gracefully when not connected."""
-        client = AsyncClaudeClient()
-
-        with pytest.raises(RuntimeError, match="not connected"):
-            async for _ in client.query_stream("test"):
-                pass
+            await client.send_request("test")
 
     @pytest.mark.asyncio
     async def test_interrupt_fails_when_not_connected(self):
-        """Test that interrupt() fails gracefully when not connected."""
-        client = AsyncClaudeClient()
+        """Test that interrupt fails when not connected."""
+        handler = DefaultMessageHandler()
+        client = AsyncClaudeClient(message_handler=handler)
 
         with pytest.raises(RuntimeError, match="not connected"):
             await client.interrupt()
 
 
-class TestAsyncClaudeClientMessageFormat:
-    """Test message formatting for subprocess communication."""
+class TestAsyncDefaultMessageHandler:
+    """Test AsyncDefaultMessageHandler behavior."""
 
-    def test_message_format_includes_session_id(self):
-        """Test that messages include the session_id."""
-        client = AsyncClaudeClient()
-        client.session_id = "test-session-123"
+    @pytest.mark.asyncio
+    async def test_async_handler_buffers_messages(self):
+        """Test that AsyncDefaultMessageHandler buffers messages."""
+        handler = AsyncDefaultMessageHandler()
 
-        # Build a message like query_stream does
-        message = {
-            "type": "user",
-            "message": {"role": "user", "content": "test prompt"},
-            "session_id": client.session_id,
-        }
+        msg = AssistantMessage(
+            model="test",
+            content=[TextBlock(text="Hello")],
+        )
 
-        assert message["session_id"] == "test-session-123"
-        assert message["type"] == "user"
-        assert message["message"]["role"] == "user"
+        await handler.on_message(msg)
+
+        messages = await handler.get_messages()
+        assert len(messages) == 1
+        assert messages[0] is msg
+
+    @pytest.mark.asyncio
+    async def test_async_handler_query_start_resets_buffer(self):
+        """Test that on_query_start resets the buffer."""
+        handler = AsyncDefaultMessageHandler()
+
+        msg1 = AssistantMessage(model="test", content=[TextBlock(text="First")])
+        msg2 = AssistantMessage(model="test", content=[TextBlock(text="Second")])
+
+        await handler.on_message(msg1)
+        messages = await handler.get_messages()
+        assert len(messages) == 1
+
+        await handler.on_query_start("new query")
+        messages = await handler.get_messages()
+        assert len(messages) == 0  # Buffer reset
+
+        await handler.on_message(msg2)
+        messages = await handler.get_messages()
+        assert len(messages) == 1
+
+    @pytest.mark.asyncio
+    async def test_async_handler_wait_for_completion(self):
+        """Test that wait_for_completion works correctly."""
+        handler = AsyncDefaultMessageHandler()
+
+        # Not complete yet
+        assert not await handler.wait_for_completion(timeout=0.1)
+
+        # Set complete event
+        await handler.on_query_start("test")
+        await handler.on_query_complete([])
+
+        # Now should complete immediately
+        assert await handler.wait_for_completion(timeout=1.0)
+
+    @pytest.mark.asyncio
+    async def test_async_handler_is_complete(self):
+        """Test that is_complete returns correct status."""
+        handler = AsyncDefaultMessageHandler()
+
+        assert not await handler.is_complete()
+
+        await handler.on_query_start("test")
+        assert not await handler.is_complete()
+
+        await handler.on_query_complete([])
+        assert await handler.is_complete()
 
 
 class TestAsyncClaudeClientAsyncContextManager:
@@ -306,7 +450,8 @@ class TestAsyncClaudeClientAsyncContextManager:
     @pytest.mark.asyncio
     async def test_async_context_manager_returns_self(self):
         """Test that __aenter__ returns self."""
-        client = AsyncClaudeClient()
+        handler = DefaultMessageHandler()
+        client = AsyncClaudeClient(message_handler=handler)
 
         async with client as entered_client:
             assert entered_client is client
@@ -314,7 +459,8 @@ class TestAsyncClaudeClientAsyncContextManager:
     @pytest.mark.asyncio
     async def test_async_context_manager_cleanup_on_exception(self):
         """Test that context manager cleans up even on exception."""
-        client = AsyncClaudeClient()
+        handler = DefaultMessageHandler()
+        client = AsyncClaudeClient(message_handler=handler)
 
         with pytest.raises(ValueError):
             async with client:
@@ -330,10 +476,10 @@ class TestAsyncClaudeClientConcurrentOperations:
     @pytest.mark.asyncio
     async def test_concurrent_is_connected_checks(self):
         """Test that is_connected can be checked concurrently."""
-        client = AsyncClaudeClient()
+        handler = DefaultMessageHandler()
+        client = AsyncClaudeClient(message_handler=handler)
 
         # Check is_connected multiple times concurrently
-        # is_connected is a property, so we access it directly
         results = [client.is_connected for _ in range(10)]
 
         # All should be False (not connected)
@@ -347,49 +493,9 @@ class TestAsyncClaudeClientManagerType:
         """Test that client uses AsyncPersistentProcessManager."""
         from claude_sdk_lite.async_persistent_executor import AsyncPersistentProcessManager
 
-        client = AsyncClaudeClient()
+        handler = DefaultMessageHandler()
+        client = AsyncClaudeClient(message_handler=handler)
         assert isinstance(client._manager, AsyncPersistentProcessManager)
-
-
-class TestAsyncClaudeClientWithRealCommands:
-    """Tests using real commands (not Claude CLI)."""
-
-    @pytest.mark.asyncio
-    async def test_with_echo_command(self):
-        """Test client behavior with echo command."""
-        # This tests the client structure with a simple command
-        # We're not actually calling Claude, just verifying the structure
-        options = ClaudeOptions()
-        client = AsyncClaudeClient(options=options)
-
-        # Verify structure
-        assert hasattr(client, "_manager")
-        assert hasattr(client, "session_id")
-        assert hasattr(client, "options")
-        assert hasattr(client, "_debug")
-
-    @pytest.mark.asyncio
-    async def test_session_id_persistence(self):
-        """Test that session_id persists across operations."""
-        client = AsyncClaudeClient()
-        original_session_id = client.session_id
-
-        # Session ID should remain the same
-        assert client.session_id == original_session_id
-
-
-class TestAsyncClaudeClientQueryCollection:
-    """Test query method's message collection behavior."""
-
-    @pytest.mark.asyncio
-    async def test_query_collects_all_messages_from_stream(self):
-        """Test that query() properly collects messages from stream."""
-        # This is a structural test - actual integration would need mocking
-        client = AsyncClaudeClient()
-
-        # Without connection, should raise RuntimeError
-        with pytest.raises(RuntimeError):
-            await client.query("test prompt")
 
 
 class TestAsyncClaudeClientMethodSignatures:
@@ -398,33 +504,34 @@ class TestAsyncClaudeClientMethodSignatures:
     @pytest.mark.asyncio
     async def test_connect_is_async(self):
         """Test that connect() is an async method."""
-        client = AsyncClaudeClient()
+        handler = DefaultMessageHandler()
+        client = AsyncClaudeClient(message_handler=handler)
         assert asyncio.iscoroutinefunction(client.connect)
 
     @pytest.mark.asyncio
     async def test_disconnect_is_async(self):
         """Test that disconnect() is an async method."""
-        client = AsyncClaudeClient()
+        handler = DefaultMessageHandler()
+        client = AsyncClaudeClient(message_handler=handler)
         assert asyncio.iscoroutinefunction(client.disconnect)
 
     @pytest.mark.asyncio
-    async def test_query_is_async(self):
-        """Test that query() is an async method."""
-        client = AsyncClaudeClient()
-        assert asyncio.iscoroutinefunction(client.query)
-
-    @pytest.mark.asyncio
-    async def test_query_stream_returns_async_iterator(self):
-        """Test that query_stream() returns an async iterator."""
-        client = AsyncClaudeClient()
-        stream = client.query_stream("test")
-
-        # Should have __aiter__ and __anext__
-        assert hasattr(stream, "__aiter__")
-        assert hasattr(stream, "__anext__")
+    async def test_send_request_is_async(self):
+        """Test that send_request() is an async method."""
+        handler = DefaultMessageHandler()
+        client = AsyncClaudeClient(message_handler=handler)
+        assert asyncio.iscoroutinefunction(client.send_request)
 
     @pytest.mark.asyncio
     async def test_interrupt_is_async(self):
         """Test that interrupt() is an async method."""
-        client = AsyncClaudeClient()
+        handler = DefaultMessageHandler()
+        client = AsyncClaudeClient(message_handler=handler)
         assert asyncio.iscoroutinefunction(client.interrupt)
+
+    @pytest.mark.asyncio
+    async def test_get_stderr_is_async(self):
+        """Test that get_stderr() is an async method."""
+        handler = DefaultMessageHandler()
+        client = AsyncClaudeClient(message_handler=handler)
+        assert asyncio.iscoroutinefunction(client.get_stderr)

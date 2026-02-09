@@ -34,7 +34,6 @@ Example (async):
 __version__ = "0.1.0"
 
 from .async_persistent_executor import AsyncPersistentProcessManager
-from .persistent_executor import PersistentProcessManager
 from .client import AsyncClaudeClient, ClaudeClient
 from .exceptions import (
     ClaudeSDKLiteError,
@@ -42,8 +41,15 @@ from .exceptions import (
     CLINotFoundError,
     QueryError,
 )
+from .message_handler import (
+    AsyncDefaultMessageHandler,
+    AsyncMessageEventListener,
+    DefaultMessageHandler,
+    MessageEventListener,
+)
 from .message_parser import MessageParseError, parse_message
 from .options import ClaudeOptions
+from .persistent_executor import PersistentProcessManager
 from .query import (
     async_query,
     async_query_text,
@@ -82,6 +88,11 @@ __all__ = [
     "async_query_text",
     # Options
     "ClaudeOptions",
+    # Message handlers
+    "MessageEventListener",
+    "DefaultMessageHandler",
+    "AsyncMessageEventListener",
+    "AsyncDefaultMessageHandler",
     # Message types
     "Message",
     "AssistantMessage",

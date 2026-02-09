@@ -1,25 +1,98 @@
 #!/usr/bin/env python3
-"""Async interactive chat example using AsyncClaudeClient.
+"""Async interactive chat example using AsyncClaudeClient with custom handler.
 
 This demonstrates a minimal async chatbot with:
 - Multi-turn conversation
 - Context retention
 - Double Ctrl+C to exit (single Ctrl+C interrupts)
-- "Thinking" state while waiting for response
 - Clean exit handling
+- Event-driven message handling via custom MessageEventListener
 """
 
 import asyncio
 import os
-import sys
+import time
 
-from claude_sdk_lite import AsyncClaudeClient, ClaudeOptions
+from claude_sdk_lite import (
+    AssistantMessage,
+    AsyncClaudeClient,
+    AsyncMessageEventListener,
+    ClaudeOptions,
+    ResultMessage,
+    SystemMessage,
+    TextBlock,
+    ThinkingBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+)
 
 # Time window for double Ctrl+C to trigger exit
 DOUBLE_INTERRUPT_TIMEOUT = 2.0
 
 # Enable debug mode to see all messages
 DEBUG = os.environ.get("CLAUDE_SDK_DEBUG", "false").lower() == "true"
+
+
+class AsyncChatMessageHandler(AsyncMessageEventListener):
+    """Custom async message handler for chat interface.
+
+    This handler buffers messages and provides async callbacks for the chat UI.
+    """
+
+    def __init__(self):
+        """Initialize the async chat handler."""
+        self.messages = []
+        self.complete_event = None
+
+    async def on_query_start(self, prompt: str):
+        """Called when a query starts."""
+        if DEBUG:
+            print(f"\n[DEBUG] Query started: {prompt[:50]}...", flush=True)
+        self.messages = []
+        self.complete_event = asyncio.Event()
+
+    async def on_message(self, message):
+        """Called when any message is received."""
+        self.messages.append(message)
+
+        # Print assistant messages in real-time
+        if isinstance(message, AssistantMessage):
+            print("\nClaude: ", end="", flush=True)
+            for block in message.content:
+                if isinstance(block, TextBlock):
+                    print(block.text, end="", flush=True)
+                elif isinstance(block, ToolUseBlock):
+                    print(f"\n[Tool: {block.name}]", end="", flush=True)
+                elif isinstance(block, ThinkingBlock):
+                    print(f"\n[Thinking...]", end="", flush=True)
+        elif isinstance(message, SystemMessage):
+            print(f"\n[System: {message.data.get('subtype', 'unknown')}]", end="", flush=True)
+        elif isinstance(message, ResultMessage):
+            print("\nResult: ", end="", flush=True)
+            if message.is_error:
+                print(f"\n[Error: {message.result}]", end="", flush=True)
+            else:
+                # Show cost if available
+                if message.total_cost_usd:
+                    print(
+                        f"\n\n[Cost: ${message.total_cost_usd:.4f} | Turns: {message.num_turns}]",
+                        end="",
+                        flush=True,
+                    )
+                elif message.num_turns:
+                    print(f"\n\n[Turns: {message.num_turns}]", end="", flush=True)
+
+    async def on_query_complete(self, messages):
+        """Called when a query completes."""
+        if DEBUG:
+            print(f"\n[DEBUG] Query complete: {len(messages)} messages", flush=True)
+
+        if self.complete_event:
+            self.complete_event.set()
+
+    async def on_error(self, error):
+        """Called when an error occurs."""
+        print(f"\n[Error: {error}]", flush=True)
 
 
 class SimpleAsyncChat:
@@ -32,7 +105,8 @@ class SimpleAsyncChat:
             options: Configuration options for the session.
         """
         self.options = options
-        self.client = AsyncClaudeClient(options=options)
+        self.handler = AsyncChatMessageHandler()
+        self.client = AsyncClaudeClient(options=options, message_handler=self.handler)
         self.last_interrupt_time = None
         self.is_thinking = False
 
@@ -42,8 +116,6 @@ class SimpleAsyncChat:
         Returns:
             True if interrupt was handled, False if it's a double-interrupt (exit).
         """
-        import time
-
         current_time = time.time()
 
         # Check if this is a double-interrupt
@@ -73,65 +145,21 @@ class SimpleAsyncChat:
         Args:
             prompt: The user's prompt.
         """
-        from claude_sdk_lite.types import (
-            AssistantMessage,
-            ResultMessage,
-            SystemMessage,
-            TextBlock,
-            ThinkingBlock,
-            ToolResultBlock,
-            ToolUseBlock,
-        )
-
-        if DEBUG:
-            print(f"\n{'='*60}", flush=True)
-            print(f"[DEBUG] Sending query: {prompt[:50]}...", flush=True)
-            print(f"{'='*60}", flush=True)
-
         self.is_thinking = True
 
         try:
-            message_count = 0
-            print("\nClaude: ", end="", flush=True)
+            # Create completion event for this query
+            self.handler.complete_event = asyncio.Event()
 
-            async for message in self.client.query_stream(prompt):
-                message_count += 1
+            # Send request - messages will be printed by handler callbacks
+            await self.client.send_request(prompt)
 
-                if DEBUG:
-                    type_name = type(message).__name__
-                    print(f"\n[DEBUG] Message #{message_count}:", flush=True)
-                    print(f"  - Type: {type_name}", flush=True)
-
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            print(block.text, end="", flush=True)
-                        elif isinstance(block, ToolUseBlock):
-                            print(f"\n[Tool: {block.name}]", end="", flush=True)
-                        elif isinstance(block, ThinkingBlock):
-                            print(f"\n[Thinking...]", end="", flush=True)
-                elif isinstance(message, SystemMessage):
-                    print(
-                        f"\n[System: {message.data.get('subtype', 'unknown')}]", end="", flush=True
-                    )
-                elif isinstance(message, ResultMessage):
-                    if message.is_error:
-                        print(f"\n[Error: {message.result}]", end="", flush=True)
-                    else:
-                        # Show cost if available
-                        if message.total_cost_usd:
-                            print(
-                                f"\n\n[Cost: ${message.total_cost_usd:.4f} | Turns: {message.num_turns}]",
-                                end="",
-                                flush=True,
-                            )
-                        elif message.num_turns:
-                            print(f"\n\n[Turns: {message.num_turns}]", end="", flush=True)
-
+            # Wait for completion
+            await asyncio.wait_for(self.handler.complete_event.wait(), timeout=30.0)
             print()  # New line after response
 
             if DEBUG:
-                print(f"\n[DEBUG] Completed: {message_count} messages", flush=True)
+                print(f"\n[DEBUG] Completed: {len(self.handler.messages)} messages", flush=True)
 
         finally:
             self.is_thinking = False
@@ -139,7 +167,7 @@ class SimpleAsyncChat:
     async def run(self):
         """Run the async interactive chat loop."""
         print("╔══════════════════════════════════════════════════════════════╗")
-        print("║        Async Simple Chat - Powered by AsyncClaudeClient    ║")
+        print("║        Async Simple Chat - Event-Driven Architecture        ║")
         print("╚══════════════════════════════════════════════════════════════╝")
         print("\nCommands:")
         print("  - Type your message to chat")

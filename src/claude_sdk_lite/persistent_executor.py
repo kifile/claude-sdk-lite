@@ -128,10 +128,17 @@ class PersistentProcessManager:
             self._initializing = True
 
             try:
-                # Prevent console window on Windows
+                # Prevent console window on Windows and create new process group
                 if sys.platform == "win32":
                     kwargs = kwargs.copy()
-                    kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                    kwargs["creationflags"] = (
+                        subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+                    )
+                else:
+                    # Unix/Linux: start_new_session puts the subprocess in a new session
+                    # This prevents Ctrl+C from being forwarded to the subprocess
+                    kwargs = kwargs.copy()
+                    kwargs["start_new_session"] = True
 
                 # Start process with stdin for bidirectional communication
                 # Use bufsize=0 for unbuffered I/O (critical for pipe communication)
