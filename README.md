@@ -646,6 +646,20 @@ CLAUDE_SDK_DEBUG=true python examples/simple_chat.py
 
 ## 📄 Release Notes
 
+### [0.2.1] - 2025-02-10
+
+**🎉 New Feature: Echo Mode**
+
+#### Additions
+- **Echo Mode** - New `echo_mode` option in `ClaudeOptions` (default: `False`)
+  - Echo user input back through `on_message` callback as `UserMessage` with `TextBlock`
+  - Echo interrupt signals as `UserMessage` with `InterruptBlock`
+  - Useful for UI applications that need to display user input in message stream
+  - Ensures proper timing with `on_query_start` callback for message buffering
+
+#### New Types
+- `InterruptBlock` - Content block type for interrupt signal messages
+
 ### [0.2.0] - 2025-02-10
 
 **🎉 Major Update: Event-Driven Architecture & Multi-Turn Conversations**
