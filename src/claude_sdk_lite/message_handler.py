@@ -20,13 +20,11 @@ class _MessageBufferMixin:
         """Initialize message buffer state."""
         self._current_query_messages: list[Message] = []
         self._current_query_prompt: str | None = None
-        self._streaming = False
 
     def _reset_buffer(self) -> None:
         """Reset buffer for new query."""
         self._current_query_messages = []
         self._current_query_prompt = None
-        self._streaming = False
 
 
 class MessageEventListener:
@@ -61,12 +59,6 @@ class MessageEventListener:
     def on_query_complete(self, messages: list[Message]) -> None:
         """Called when a query completes."""
 
-    def on_stream_start(self) -> None:
-        """Called when streaming starts."""
-
-    def on_stream_end(self) -> None:
-        """Called when streaming ends."""
-
 
 class DefaultMessageHandler(MessageEventListener, _MessageBufferMixin):
     """Default handler that buffers messages by query.
@@ -100,16 +92,6 @@ class DefaultMessageHandler(MessageEventListener, _MessageBufferMixin):
         with self._lock:
             if self._query_complete_event:
                 self._query_complete_event.set()
-
-    def on_stream_start(self) -> None:
-        """Mark streaming as active."""
-        with self._lock:
-            self._streaming = True
-
-    def on_stream_end(self) -> None:
-        """Mark streaming as inactive."""
-        with self._lock:
-            self._streaming = False
 
     def get_messages(self) -> list[Message]:
         """Get all buffered messages for current query."""
@@ -164,12 +146,6 @@ class AsyncMessageEventListener:
     async def on_query_complete(self, messages: list[Message]) -> None:
         """Called when a query completes (async)."""
 
-    async def on_stream_start(self) -> None:
-        """Called when streaming starts."""
-
-    async def on_stream_end(self) -> None:
-        """Called when streaming ends."""
-
 
 class AsyncDefaultMessageHandler(AsyncMessageEventListener, _MessageBufferMixin):
     """Default async handler that buffers messages by query.
@@ -201,16 +177,6 @@ class AsyncDefaultMessageHandler(AsyncMessageEventListener, _MessageBufferMixin)
         async with self._lock:
             if self._query_complete_event:
                 self._query_complete_event.set()
-
-    async def on_stream_start(self) -> None:
-        """Mark streaming as active."""
-        async with self._lock:
-            self._streaming = True
-
-    async def on_stream_end(self) -> None:
-        """Mark streaming as inactive."""
-        async with self._lock:
-            self._streaming = False
 
     async def get_messages(self) -> list[Message]:
         """Get all buffered messages for current query."""
