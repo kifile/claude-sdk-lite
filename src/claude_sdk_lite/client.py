@@ -24,7 +24,7 @@ from claude_sdk_lite.message_handler import (
 from claude_sdk_lite.message_parser import MessageParseError, parse_message
 from claude_sdk_lite.options import ClaudeOptions
 from claude_sdk_lite.persistent_executor import PersistentProcessManager
-from claude_sdk_lite.types import Message, ResultMessage
+from claude_sdk_lite.types import InterruptBlock, Message, ResultMessage, TextBlock, UserMessage
 
 logger = logging.getLogger(__name__)
 
@@ -202,8 +202,13 @@ class ClaudeClient(_BaseClient):
         if not self._manager.is_alive():
             raise RuntimeError("Client not connected. Call connect() first or use context manager.")
 
-        # Notify handler of query start
+        # Notify handler of query start first (this resets buffer in DefaultMessageHandler)
         self._safe_callback(lambda: self._handler.on_query_start(prompt))
+
+        # Echo user input if echo mode is enabled (after query start so it's buffered)
+        if self.options.echo_mode:
+            user_echo = UserMessage(content=[TextBlock(text=prompt)])
+            self._safe_callback(lambda: self._handler.on_message(user_echo))
 
         # Mark request as in progress
         with self._request_lock:
@@ -236,6 +241,11 @@ class ClaudeClient(_BaseClient):
                 self._log_debug("Ignoring interrupt: no request in progress")
                 return
             self._request_in_progress = False
+
+        # Echo interrupt signal if echo mode is enabled
+        if self.options.echo_mode:
+            interrupt_echo = UserMessage(content=[InterruptBlock()])
+            self._safe_callback(lambda: self._handler.on_message(interrupt_echo))
 
         self._manager.write_interrupt()
 
@@ -475,11 +485,19 @@ class AsyncClaudeClient(_BaseClient):
                 "Client not connected. Call connect() first or use async context manager."
             )
 
-        # Notify handler of query start
+        # Notify handler of query start first (this resets buffer in DefaultMessageHandler)
         if self._is_async_handler:
             await self._handler.on_query_start(prompt)
         else:
             self._handler.on_query_start(prompt)
+
+        # Echo user input if echo mode is enabled (after query start so it's buffered)
+        if self.options.echo_mode:
+            user_echo = UserMessage(content=[TextBlock(text=prompt)])
+            if self._is_async_handler:
+                await self._handler.on_message(user_echo)
+            else:
+                self._handler.on_message(user_echo)
 
         # Mark request as in progress
         async with self._request_lock:
@@ -514,6 +532,14 @@ class AsyncClaudeClient(_BaseClient):
                 self._log_debug("Ignoring interrupt: no request in progress")
                 return
             self._request_in_progress = False
+
+        # Echo interrupt signal if echo mode is enabled
+        if self.options.echo_mode:
+            interrupt_echo = UserMessage(content=[InterruptBlock()])
+            if self._is_async_handler:
+                await self._handler.on_message(interrupt_echo)
+            else:
+                self._handler.on_message(interrupt_echo)
 
         await self._manager.write_interrupt()
 

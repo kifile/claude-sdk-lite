@@ -7,6 +7,7 @@ from typing import Any
 from .types import (
     AssistantMessage,
     ContentBlock,
+    InterruptBlock,
     Message,
     ResultMessage,
     StreamEvent,
@@ -131,6 +132,8 @@ def _parse_content_blocks(blocks: list[dict[str, Any]]) -> list[ContentBlock]:
                         is_error=block.get("is_error"),
                     )
                 )
+            case "interrupt":
+                content_blocks.append(InterruptBlock())
     return content_blocks
 
 

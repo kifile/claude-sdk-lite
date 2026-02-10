@@ -101,6 +101,10 @@ class ClaudeOptions(BaseModel):
         description="Print response and exit (non-interactive mode, useful for pipes)",
         alias="print",
     )
+    echo_mode: bool = Field(
+        default=False,
+        description="Echo user input and interrupt signals through on_message callback",
+    )
     permission_mode: str | None = Field(
         default=None,
         description="Permission mode: 'default', 'acceptEdits', 'plan', 'bypassPermissions', 'delegate', 'dontAsk'",

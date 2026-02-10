@@ -41,7 +41,17 @@ class ToolResultBlock(BaseModel):
     type: Literal["tool_result"] = "tool_result"
 
 
-ContentBlock = TextBlock | ThinkingBlock | ToolUseBlock | ToolResultBlock
+class InterruptBlock(BaseModel):
+    """Interrupt signal block for echo mode.
+
+    This block represents an interrupt signal sent by the user,
+    echoed back when echo mode is enabled.
+    """
+
+    type: Literal["interrupt"] = "interrupt"
+
+
+ContentBlock = TextBlock | ThinkingBlock | ToolUseBlock | ToolResultBlock | InterruptBlock
 
 
 class UserMessage(BaseModel):

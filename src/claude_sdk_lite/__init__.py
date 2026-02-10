@@ -59,6 +59,7 @@ from .query import (
 from .types import (
     AssistantMessage,
     ContentBlock,
+    InterruptBlock,
     Message,
     ResultMessage,
     StreamEvent,
@@ -107,6 +108,7 @@ __all__ = [
     "ThinkingBlock",
     "ToolUseBlock",
     "ToolResultBlock",
+    "InterruptBlock",
     # Errors
     "ClaudeSDKLiteError",
     "QueryError",
