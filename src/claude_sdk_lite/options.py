@@ -101,9 +101,9 @@ class ClaudeOptions(BaseModel):
         description="Print response and exit (non-interactive mode, useful for pipes)",
         alias="print",
     )
-    echo_mode: bool = Field(
+    replay_user_messages: bool = Field(
         default=False,
-        description="Echo user input and interrupt signals through on_message callback",
+        description="Replay user input through message stream (enables --replay-user-messages flag)",
     )
     permission_mode: str | None = Field(
         default=None,
@@ -450,6 +450,9 @@ class ClaudeOptions(BaseModel):
         # Mode options
         if self.print_mode:
             cmd.append("--print")
+
+        if self.replay_user_messages:
+            cmd.append("--replay-user-messages")
 
         if self.permission_mode:
             cmd.extend(["--permission-mode", self.permission_mode])

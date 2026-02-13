@@ -22,12 +22,14 @@ from claude_sdk_lite import (
     AsyncClaudeClient,
     AsyncMessageEventListener,
     ClaudeOptions,
+    InterruptBlock,
     ResultMessage,
     SystemMessage,
     TextBlock,
     ThinkingBlock,
     ToolResultBlock,
     ToolUseBlock,
+    UserMessage,
 )
 
 # Time window for double Ctrl+C to trigger exit
@@ -59,8 +61,21 @@ class AsyncChatMessageHandler(AsyncMessageEventListener):
         """Called when any message is received."""
         self.messages.append(message)
 
+        # Print user messages (when replay_user_messages is enabled)
+        if isinstance(message, UserMessage):
+            # Content can be either a string or list of ContentBlocks
+            if isinstance(message.content, str):
+                print(f"\nYou: {message.content}", end="", flush=True)
+            else:
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        print(f"\nYou: {block.text}", end="", flush=True)
+                    elif isinstance(block, InterruptBlock):
+                        print("\n[Interrupted]", end="", flush=True)
+                    else:
+                        print(f"\n[User:{type(block)}]:{block}")
         # Print assistant messages in real-time
-        if isinstance(message, AssistantMessage):
+        elif isinstance(message, AssistantMessage):
             for block in message.content:
                 if isinstance(block, TextBlock):
                     print(f"\nClaude: {block.text}", end="", flush=True)
@@ -86,6 +101,8 @@ class AsyncChatMessageHandler(AsyncMessageEventListener):
                     )
                 elif message.num_turns:
                     print(f"\n\n[Turns: {message.num_turns}]", end="", flush=True)
+        else:
+            print(f"\n[{type(message)}]: {message}")
 
     async def on_query_complete(self, messages):
         """Called when a query completes."""
@@ -271,6 +288,7 @@ async def main():
     options = ClaudeOptions(
         model="haiku",  # Use haiku for faster responses
         system_prompt="You are a friendly and helpful assistant. Keep responses concise.",
+        replay_user_messages=True,  # Enable user input replay through message stream
     )
 
     # Create and run chat

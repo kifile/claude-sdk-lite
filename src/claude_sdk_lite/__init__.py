@@ -59,6 +59,7 @@ from .query import (
 from .types import (
     AssistantMessage,
     ContentBlock,
+    ControlResponseMessage,
     InterruptBlock,
     Message,
     ResultMessage,
@@ -101,6 +102,7 @@ __all__ = [
     "SystemMessage",
     "ResultMessage",
     "StreamEvent",
+    "ControlResponseMessage",
     "UnknownMessage",
     # Content blocks
     "ContentBlock",

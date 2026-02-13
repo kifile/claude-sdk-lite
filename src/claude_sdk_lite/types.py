@@ -126,6 +126,18 @@ class StreamEvent(BaseModel):
     parent_tool_use_id: str | None = None
 
 
+class ControlResponseMessage(BaseModel):
+    """Control response message for command acknowledgments.
+
+    This message type is sent by the CLI in response to control requests
+    (like interrupt signals). It contains the response status and request ID.
+    """
+
+    subtype: str
+    request_id: str | None = None
+    response: dict[str, Any]
+
+
 class UnknownMessage(BaseModel):
     """Unknown message type for forward compatibility.
 

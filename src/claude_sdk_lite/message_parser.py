@@ -7,6 +7,7 @@ from typing import Any
 from .types import (
     AssistantMessage,
     ContentBlock,
+    ControlResponseMessage,
     InterruptBlock,
     Message,
     ResultMessage,
@@ -100,6 +101,8 @@ def parse_message(data: dict[str, Any] | str) -> Message:
                 return _parse_result_message(data)
             case "stream_event":
                 return _parse_stream_event(data)
+            case "control_response":
+                return _parse_control_response(data)
             case _:
                 # Return UnknownMessage for unrecognized types for forward compatibility
                 logger.debug(f"Unknown message type: {message_type}, returning UnknownMessage")
@@ -226,4 +229,14 @@ def _parse_stream_event(data: dict[str, Any]) -> StreamEvent:
         session_id=data["session_id"],
         event=data["event"],
         parent_tool_use_id=data.get("parent_tool_use_id"),
+    )
+
+
+def _parse_control_response(data: dict[str, Any]) -> ControlResponseMessage:
+    """Parse a control response message."""
+    response_data = data.get("response", {})
+    return ControlResponseMessage(
+        subtype=response_data.get("subtype", "unknown"),
+        request_id=response_data.get("request_id"),
+        response=response_data,
     )
