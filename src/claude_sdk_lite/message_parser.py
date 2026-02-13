@@ -24,7 +24,12 @@ logger = logging.getLogger(__name__)
 
 
 class MessageParseError(Exception):
-    """Error raised when message parsing fails."""
+    """Error raised when message parsing fails.
+
+    Note: parse_message() no longer raises this exception. Instead, it returns
+    an UnknownMessage for any parsing failures. This exception is kept for
+    backward compatibility but is no longer used internally.
+    """
 
     def __init__(self, message: str, data: Any):
         self.message = message
@@ -36,20 +41,28 @@ def parse_message(data: dict[str, Any] | str) -> Message:
     """
     Parse message from CLI output into typed Message objects.
 
+    This function never raises exceptions for parsing errors. Instead, it returns
+    an UnknownMessage containing the raw data, allowing the application layer to
+    decide how to handle unexpected or malformed messages. This design provides
+    forward compatibility and resilience.
+
     Args:
         data: Raw message dictionary from CLI output (dict or JSON string)
 
     Returns:
-        Parsed Message object
-
-    Raises:
-        MessageParseError: If parsing fails or message type is unrecognized
+        Parsed Message object, or UnknownMessage if parsing fails
 
     Example:
         ```python
         raw = '{"type": "assistant", "message": {"model": "sonnet", "content": [...]}}'
         msg = parse_message(raw)
         isinstance(msg, AssistantMessage)  # True
+
+        # Unknown types are safely wrapped:
+        unknown_raw = '{"type": "future_type", "data": {...}}'
+        msg = parse_message(unknown_raw)
+        isinstance(msg, UnknownMessage)  # True
+        msg.type == "future_type"  # True
         ```
     """
     # Parse JSON string if needed
@@ -57,18 +70,24 @@ def parse_message(data: dict[str, Any] | str) -> Message:
         try:
             data = json.loads(data)
         except json.JSONDecodeError as e:
-            raise MessageParseError("Invalid JSON string", data) from e
+            logger.warning(f"Failed to parse JSON string, returning UnknownMessage: {e}")
+            return UnknownMessage(type="invalid_json", raw_data={"raw_string": data})
 
     if not isinstance(data, dict):
-        raise MessageParseError(
-            f"Invalid message data type (expected dict, got {type(data).__name__})",
-            data,
+        logger.warning(
+            f"Invalid message data type (expected dict, got {type(data).__name__}), returning UnknownMessage"
+        )
+        return UnknownMessage(
+            type=f"invalid_type_{type(data).__name__}",
+            raw_data={"raw_data": data} if not isinstance(data, str) else {"raw_string": data},
         )
 
     message_type = data.get("type")
     if not message_type:
-        raise MessageParseError("Message missing 'type' field", data)
+        logger.debug("Message missing 'type' field, returning UnknownMessage")
+        return UnknownMessage(type="missing_type", raw_data=data)
 
+    # Try to parse known message types
     try:
         match message_type:
             case "user":
@@ -85,14 +104,16 @@ def parse_message(data: dict[str, Any] | str) -> Message:
                 # Return UnknownMessage for unrecognized types for forward compatibility
                 logger.debug(f"Unknown message type: {message_type}, returning UnknownMessage")
                 return UnknownMessage(type=message_type, raw_data=data)
-    except KeyError as e:
-        raise MessageParseError(
-            f"Missing required field in {message_type} message: {e}", data
-        ) from e
-    except MessageParseError:
-        raise
+    except (KeyError, TypeError, ValueError, AttributeError) as e:
+        # Catch parsing errors and return UnknownMessage instead of raising
+        logger.warning(f"Failed to parse {message_type} message: {e}, returning UnknownMessage")
+        return UnknownMessage(type=message_type, raw_data=data)
     except Exception as e:
-        raise MessageParseError(f"Failed to parse {message_type} message: {e}", data) from e
+        # Catch any other unexpected exceptions
+        logger.error(
+            f"Unexpected error parsing {message_type} message: {e}, returning UnknownMessage"
+        )
+        return UnknownMessage(type=message_type, raw_data=data)
 
 
 def _parse_content_blocks(blocks: list[dict[str, Any]]) -> list[ContentBlock]:

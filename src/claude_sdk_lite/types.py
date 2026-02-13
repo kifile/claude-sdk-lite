@@ -60,7 +60,7 @@ class UserMessage(BaseModel):
     content: str | list[ContentBlock]
     uuid: str | None = None
     parent_tool_use_id: str | None = None
-    tool_use_result: dict[str, Any] | None = None
+    tool_use_result: dict[str, Any] | str | None = None
 
 
 class AssistantMessage(BaseModel):

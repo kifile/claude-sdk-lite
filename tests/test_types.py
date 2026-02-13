@@ -4,6 +4,7 @@ import pytest
 
 from claude_sdk_lite.types import (
     AssistantMessage,
+    InterruptBlock,
     ResultMessage,
     StreamEvent,
     SystemMessage,
@@ -11,6 +12,7 @@ from claude_sdk_lite.types import (
     ThinkingBlock,
     ToolResultBlock,
     ToolUseBlock,
+    UnknownMessage,
     UserMessage,
 )
 
@@ -109,6 +111,12 @@ class TestToolResultBlock:
         assert data["content"] == "Result"
         assert data["is_error"] is False
 
+    def test_tool_result_block_with_none_content(self):
+        """Test ToolResultBlock with None content."""
+        block = ToolResultBlock(tool_use_id="tool_123", content=None)
+        assert block.content is None
+        assert block.type == "tool_result"
+
 
 class TestUserMessage:
     """Test UserMessage type."""
@@ -141,6 +149,29 @@ class TestUserMessage:
         assert msg.uuid == "user-uuid-123"
         assert msg.parent_tool_use_id == "tool_parent"
         assert msg.tool_use_result == {"status": "completed"}
+
+    def test_user_message_tool_use_result_with_string(self):
+        """Test UserMessage with tool_use_result as string."""
+        msg = UserMessage(
+            content="Test",
+            tool_use_result="Error: command failed",
+        )
+        assert msg.tool_use_result == "Error: command failed"
+        assert isinstance(msg.tool_use_result, str)
+
+    def test_user_message_tool_use_result_with_dict(self):
+        """Test UserMessage with tool_use_result as dict."""
+        msg = UserMessage(
+            content="Test",
+            tool_use_result={"exit_code": 1, "output": "failed"},
+        )
+        assert msg.tool_use_result == {"exit_code": 1, "output": "failed"}
+        assert isinstance(msg.tool_use_result, dict)
+
+    def test_user_message_tool_use_result_none(self):
+        """Test UserMessage with tool_use_result as None."""
+        msg = UserMessage(content="Test")
+        assert msg.tool_use_result is None
 
 
 class TestAssistantMessage:
@@ -281,6 +312,29 @@ class TestResultMessage:
         assert msg.structured_output == output
 
 
+class TestInterruptBlock:
+    """Test InterruptBlock type."""
+
+    def test_interrupt_block_creation(self):
+        """Test creating an InterruptBlock."""
+        block = InterruptBlock()
+        assert block.type == "interrupt"
+
+    def test_interrupt_block_serialization(self):
+        """Test InterruptBlock JSON serialization."""
+        block = InterruptBlock()
+        data = block.model_dump()
+        assert data == {"type": "interrupt"}
+
+    def test_interrupt_block_in_content_blocks(self):
+        """Test that InterruptBlock can be used in ContentBlock union."""
+        from claude_sdk_lite.types import ContentBlock
+
+        block: ContentBlock = InterruptBlock()
+        assert isinstance(block, InterruptBlock)
+        assert block.type == "interrupt"
+
+
 class TestStreamEvent:
     """Test StreamEvent type."""
 
@@ -302,6 +356,174 @@ class TestStreamEvent:
             parent_tool_use_id="tool_parent",
         )
         assert msg.parent_tool_use_id == "tool_parent"
+
+    def test_stream_event_with_complex_event(self):
+        """Test StreamEvent with complex event data."""
+        event = {
+            "type": "content_block_stop",
+            "index": 0,
+            "content_block": {
+                "type": "tool_use",
+                "id": "tool_123",
+                "name": "bash",
+                "input": {"command": "echo test"},
+            },
+        }
+        msg = StreamEvent(uuid="uuid", session_id="sess", event=event)
+        assert msg.event["content_block"]["name"] == "bash"
+
+
+class TestUnknownMessage:
+    """Test UnknownMessage type."""
+
+    def test_unknown_message_creation(self):
+        """Test creating an UnknownMessage."""
+        msg = UnknownMessage(
+            type="new_future_type",
+            raw_data={"field": "value", "nested": {"key": 123}},
+        )
+        assert msg.type == "new_future_type"
+        assert msg.raw_data == {"field": "value", "nested": {"key": 123}}
+
+    def test_unknown_message_serialization(self):
+        """Test UnknownMessage JSON serialization."""
+        msg = UnknownMessage(
+            type="experimental_feature",
+            raw_data={"enabled": True, "config": {"setting": "value"}},
+        )
+        data = msg.model_dump()
+        assert data["type"] == "experimental_feature"
+        assert data["raw_data"]["enabled"] is True
+
+    def test_unknown_message_in_message_union(self):
+        """Test that UnknownMessage can be used in Message union."""
+        from claude_sdk_lite.types import Message
+
+        msg: Message = UnknownMessage(type="unknown", raw_data={"x": 1})
+        assert isinstance(msg, UnknownMessage)
+        assert msg.type == "unknown"
+
+    def test_unknown_message_preserves_raw_data(self):
+        """Test that UnknownMessage preserves all raw data."""
+        raw_data = {
+            "complex_field": [1, 2, 3],
+            "nested_dict": {"a": "b", "c": None},
+            "boolean": False,
+        }
+        msg = UnknownMessage(type="complex_type", raw_data=raw_data)
+        assert msg.raw_data["complex_field"] == [1, 2, 3]
+        assert msg.raw_data["nested_dict"]["c"] is None
+        assert msg.raw_data["boolean"] is False
+
+
+class TestContentBlockUnion:
+    """Test ContentBlock union type."""
+
+    def test_content_block_with_text(self):
+        """Test ContentBlock union with TextBlock."""
+        from claude_sdk_lite.types import ContentBlock
+
+        block: ContentBlock = TextBlock(text="Hello")
+        assert isinstance(block, TextBlock)
+        assert block.text == "Hello"
+
+    def test_content_block_with_thinking(self):
+        """Test ContentBlock union with ThinkingBlock."""
+        from claude_sdk_lite.types import ContentBlock
+
+        block: ContentBlock = ThinkingBlock(thinking="Thinking...", signature="sig")
+        assert isinstance(block, ThinkingBlock)
+
+    def test_content_block_with_tool_use(self):
+        """Test ContentBlock union with ToolUseBlock."""
+        from claude_sdk_lite.types import ContentBlock
+
+        block: ContentBlock = ToolUseBlock(id="1", name="bash", input={})
+        assert isinstance(block, ToolUseBlock)
+
+    def test_content_block_with_tool_result(self):
+        """Test ContentBlock union with ToolResultBlock."""
+        from claude_sdk_lite.types import ContentBlock
+
+        block: ContentBlock = ToolResultBlock(tool_use_id="1", content="result")
+        assert isinstance(block, ToolResultBlock)
+
+    def test_content_block_with_interrupt(self):
+        """Test ContentBlock union with InterruptBlock."""
+        from claude_sdk_lite.types import ContentBlock
+
+        block: ContentBlock = InterruptBlock()
+        assert isinstance(block, InterruptBlock)
+
+    def test_mixed_content_blocks_in_message(self):
+        """Test AssistantMessage with mixed content block types."""
+        content = [
+            TextBlock(text="Let me think..."),
+            ThinkingBlock(thinking="Processing", signature="sig1"),
+            ToolUseBlock(id="tool_1", name="bash", input={"command": "ls"}),
+            ToolResultBlock(tool_use_id="tool_1", content="output"),
+            InterruptBlock(),
+        ]
+        msg = AssistantMessage(content=content, model="claude-sonnet-4-5")
+        assert len(msg.content) == 5
+        assert isinstance(msg.content[0], TextBlock)
+        assert isinstance(msg.content[1], ThinkingBlock)
+        assert isinstance(msg.content[2], ToolUseBlock)
+        assert isinstance(msg.content[3], ToolResultBlock)
+        assert isinstance(msg.content[4], InterruptBlock)
+
+
+class TestMessageUnion:
+    """Test Message union type."""
+
+    def test_message_with_user_message(self):
+        """Test Message union with UserMessage."""
+        from claude_sdk_lite.types import Message
+
+        msg: Message = UserMessage(content="Hello")
+        assert isinstance(msg, UserMessage)
+
+    def test_message_with_assistant_message(self):
+        """Test Message union with AssistantMessage."""
+        from claude_sdk_lite.types import Message
+
+        msg: Message = AssistantMessage(content=[], model="claude-sonnet-4-5")
+        assert isinstance(msg, AssistantMessage)
+
+    def test_message_with_system_message(self):
+        """Test Message union with SystemMessage."""
+        from claude_sdk_lite.types import Message
+
+        msg: Message = SystemMessage(subtype="status", data={})
+        assert isinstance(msg, SystemMessage)
+
+    def test_message_with_result_message(self):
+        """Test Message union with ResultMessage."""
+        from claude_sdk_lite.types import Message
+
+        msg: Message = ResultMessage(
+            subtype="complete",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="sess-1",
+        )
+        assert isinstance(msg, ResultMessage)
+
+    def test_message_with_stream_event(self):
+        """Test Message union with StreamEvent."""
+        from claude_sdk_lite.types import Message
+
+        msg: Message = StreamEvent(uuid="uuid", session_id="sess", event={})
+        assert isinstance(msg, StreamEvent)
+
+    def test_message_with_unknown_message(self):
+        """Test Message union with UnknownMessage."""
+        from claude_sdk_lite.types import Message
+
+        msg: Message = UnknownMessage(type="unknown", raw_data={})
+        assert isinstance(msg, UnknownMessage)
 
 
 class TestTypeValidation:
@@ -333,3 +555,107 @@ class TestTypeValidation:
                 duration_ms=1000,
                 # Missing other required fields
             )
+
+
+class TestMessageSerialization:
+    """Test message JSON serialization and deserialization."""
+
+    def test_text_block_json_roundtrip(self):
+        """Test TextBlock serialization and deserialization."""
+        original = TextBlock(text="Hello, world!")
+        data = original.model_dump_json()
+        restored = TextBlock.model_validate_json(data)
+        assert restored.text == original.text
+        assert restored.type == original.type
+
+    def test_assistant_message_json_serialization(self):
+        """Test AssistantMessage JSON serialization."""
+        msg = AssistantMessage(
+            content=[TextBlock(text="Hello"), ToolUseBlock(id="1", name="bash", input={})],
+            model="claude-sonnet-4-5",
+            error="test error",
+        )
+        data = msg.model_dump()
+        assert data["model"] == "claude-sonnet-4-5"
+        assert data["error"] == "test error"
+        assert len(data["content"]) == 2
+
+    def test_user_message_with_string_json(self):
+        """Test UserMessage with string content serialization."""
+        msg = UserMessage(content="Simple text message", uuid="user-123")
+        data = msg.model_dump()
+        assert data["content"] == "Simple text message"
+        assert data["uuid"] == "user-123"
+
+    def test_result_message_with_optional_fields_json(self):
+        """Test ResultMessage with all optional fields serialization."""
+        msg = ResultMessage(
+            subtype="complete",
+            duration_ms=1500,
+            duration_api_ms=1200,
+            is_error=False,
+            num_turns=3,
+            session_id="sess-abc",
+            total_cost_usd=0.00123,
+            usage={"input_tokens": 100, "output_tokens": 50},
+            result="Success",
+            structured_output={"key": "value"},
+        )
+        data = msg.model_dump()
+        assert data["total_cost_usd"] == 0.00123
+        assert data["usage"]["input_tokens"] == 100
+        assert data["result"] == "Success"
+        assert data["structured_output"] == {"key": "value"}
+
+
+class TestMessageEdgeCases:
+    """Test edge cases and boundary conditions."""
+
+    def test_text_block_empty_string(self):
+        """Test TextBlock with empty string."""
+        block = TextBlock(text="")
+        assert block.text == ""
+
+    def test_text_block_unicode(self):
+        """Test TextBlock with unicode characters."""
+        block = TextBlock(text="Hello 世界 🌍")
+        assert block.text == "Hello 世界 🌍"
+
+    def test_tool_use_block_empty_input(self):
+        """Test ToolUseBlock with empty input dict."""
+        block = ToolUseBlock(id="tool_1", name="test", input={})
+        assert block.input == {}
+
+    def test_tool_use_block_complex_nested_input(self):
+        """Test ToolUseBlock with deeply nested input."""
+        input_data = {
+            "files": [
+                {"path": "/a/b/c.txt", "content": "data"},
+                {"path": "/x/y/z.txt", "content": "more data"},
+            ],
+            "options": {"recursive": True, "follow_symlinks": False},
+        }
+        block = ToolUseBlock(id="tool_2", name="complex", input=input_data)
+        assert block.input["files"][0]["path"] == "/a/b/c.txt"
+
+    def test_assistant_message_empty_content(self):
+        """Test AssistantMessage with empty content list."""
+        msg = AssistantMessage(content=[], model="claude-sonnet-4-5")
+        assert len(msg.content) == 0
+
+    def test_system_message_empty_data(self):
+        """Test SystemMessage with empty data dict."""
+        msg = SystemMessage(subtype="test", data={})
+        assert msg.data == {}
+
+    def test_unknown_message_empty_raw_data(self):
+        """Test UnknownMessage with empty raw_data."""
+        msg = UnknownMessage(type="test", raw_data={})
+        assert msg.raw_data == {}
+
+    def test_tool_result_block_with_large_list_content(self):
+        """Test ToolResultBlock with large list content."""
+        content = [{"type": "text", "text": f"Line {i}"} for i in range(1000)]
+        block = ToolResultBlock(tool_use_id="tool_1", content=content)
+        assert len(block.content) == 1000
+        assert block.content[999]["text"] == "Line 999"

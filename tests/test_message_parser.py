@@ -3,9 +3,7 @@
 Tests that various CLI response formats are correctly parsed.
 """
 
-import pytest
-
-from claude_sdk_lite import MessageParseError, parse_message
+from claude_sdk_lite import parse_message
 from claude_sdk_lite.types import (
     AssistantMessage,
     ResultMessage,
@@ -458,20 +456,24 @@ class TestParseFromJSONString:
         assert msg.content[0].text == "Hi"
 
     def test_parse_from_invalid_json_string(self):
-        """Test parsing invalid JSON string raises error."""
-        with pytest.raises(MessageParseError, match="Invalid JSON string"):
-            parse_message("not a json")
+        """Test parsing invalid JSON string returns UnknownMessage."""
+        msg = parse_message("not a json")
+        assert isinstance(msg, UnknownMessage)
+        assert msg.type == "invalid_json"
+        assert msg.raw_data == {"raw_string": "not a json"}
 
 
 class TestParseErrors:
     """Test parsing error handling."""
 
     def test_parse_missing_type(self):
-        """Test parsing message without type field raises error."""
+        """Test parsing message without type field returns UnknownMessage."""
         data = {"message": {"model": "sonnet", "content": []}}
 
-        with pytest.raises(MessageParseError, match="missing 'type' field"):
-            parse_message(data)
+        msg = parse_message(data)
+        assert isinstance(msg, UnknownMessage)
+        assert msg.type == "missing_type"
+        assert msg.raw_data == data
 
     def test_parse_unknown_type(self):
         """Test parsing message with unknown type returns UnknownMessage."""
@@ -483,12 +485,14 @@ class TestParseErrors:
         assert msg.raw_data == data
 
     def test_parse_non_dict_data(self):
-        """Test parsing non-dict data raises error."""
-        with pytest.raises(MessageParseError, match="Invalid message data type"):
-            parse_message(["list", "not", "dict"])
+        """Test parsing non-dict data returns UnknownMessage."""
+        msg = parse_message(["list", "not", "dict"])
+        assert isinstance(msg, UnknownMessage)
+        assert msg.type == "invalid_type_list"
+        assert msg.raw_data == {"raw_data": ["list", "not", "dict"]}
 
     def test_parse_assistant_message_missing_required_field(self):
-        """Test parsing assistant message with missing required field."""
+        """Test parsing assistant message with missing required field returns UnknownMessage."""
         data = {
             "type": "assistant",
             "message": {
@@ -497,19 +501,23 @@ class TestParseErrors:
             },
         }
 
-        with pytest.raises(MessageParseError, match="Missing required field"):
-            parse_message(data)
+        msg = parse_message(data)
+        assert isinstance(msg, UnknownMessage)
+        assert msg.type == "assistant"
+        assert msg.raw_data == data
 
     def test_parse_result_message_missing_required_field(self):
-        """Test parsing result message with missing required field."""
+        """Test parsing result message with missing required field returns UnknownMessage."""
         data = {
             "type": "result",
             "subtype": "complete",
             # Missing "duration_ms" and other required fields
         }
 
-        with pytest.raises(MessageParseError, match="Missing required field"):
-            parse_message(data)
+        msg = parse_message(data)
+        assert isinstance(msg, UnknownMessage)
+        assert msg.type == "result"
+        assert msg.raw_data == data
 
 
 class TestRealWorldScenarios:

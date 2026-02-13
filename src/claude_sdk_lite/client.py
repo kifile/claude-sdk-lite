@@ -325,11 +325,9 @@ class ClaudeClient(_BaseClient):
 
         try:
             data = json.loads(line_str)
-            self._log_debug("Parsed: %s", data.get("type", "unknown"))
+            self._log_debug("Parsed JSON data: %s", data)
 
             message = parse_message(data)
-            type_name = type(message).__name__
-            self._log_debug("Message: type=%s", type_name)
 
             self._handle_message(message)
 
@@ -617,11 +615,9 @@ class AsyncClaudeClient(_BaseClient):
 
         try:
             data = json.loads(line_str)
-            self._log_debug("Parsed: %s", data.get("type", "unknown"))
+            self._log_debug("Parsed JSON data: %s", data)
 
             message = parse_message(data)
-            type_name = type(message).__name__
-            self._log_debug("Message: type=%s", type_name)
 
             await self._handle_message_async(message)
 

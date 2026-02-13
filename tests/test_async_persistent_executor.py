@@ -335,7 +335,7 @@ class TestAsyncInterruptFunctionality:
 
             response = json.loads(responses[0].decode("utf-8"))
             assert response["type"] == "control_request"
-            assert response["subtype"] == "interrupt"
+            assert response["request"]["subtype"] == "interrupt"
 
         finally:
             await manager.stop()

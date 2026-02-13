@@ -10,8 +10,12 @@ This demonstrates a minimal async chatbot with:
 """
 
 import asyncio
+import logging
 import os
 import time
+
+# Configure logging to show debug messages when CLAUDE_SDK_DEBUG is enabled
+logging.basicConfig(level=logging.DEBUG, format="%(name)s - %(levelname)s - %(message)s")
 
 from claude_sdk_lite import (
     AssistantMessage,
@@ -57,14 +61,15 @@ class AsyncChatMessageHandler(AsyncMessageEventListener):
 
         # Print assistant messages in real-time
         if isinstance(message, AssistantMessage):
-            print("\nClaude: ", end="", flush=True)
             for block in message.content:
                 if isinstance(block, TextBlock):
-                    print(block.text, end="", flush=True)
+                    print(f"\nClaude: {block.text}", end="", flush=True)
                 elif isinstance(block, ToolUseBlock):
-                    print(f"\n[Tool: {block.name}]", end="", flush=True)
+                    print(f"\n[Tool: {block.name}] {block.input}", end="", flush=True)
                 elif isinstance(block, ThinkingBlock):
                     print(f"\n[Thinking...]", end="", flush=True)
+                else:
+                    print(f"\n[{type(block)}]")
         elif isinstance(message, SystemMessage):
             print(f"\n[System: {message.data.get('subtype', 'unknown')}]", end="", flush=True)
         elif isinstance(message, ResultMessage):
@@ -148,14 +153,12 @@ class SimpleAsyncChat:
         self.is_thinking = True
 
         try:
-            # Create completion event for this query
-            self.handler.complete_event = asyncio.Event()
-
             # Send request - messages will be printed by handler callbacks
+            # Note: complete_event is created in on_query_start(), not here
             await self.client.send_request(prompt)
 
-            # Wait for completion
-            await asyncio.wait_for(self.handler.complete_event.wait(), timeout=30.0)
+            # Wait for completion (no timeout - let the query run as long as needed)
+            await self.handler.complete_event.wait()
             print()  # New line after response
 
             if DEBUG:

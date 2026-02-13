@@ -317,7 +317,6 @@ class AsyncPersistentProcessManager:
             while True:
                 iteration_count += 1
                 try:
-                    self._log_debug("Waiting for line... (iteration #%d)", iteration_count)
 
                     line = await asyncio.wait_for(line_queue.get(), timeout=timeout)
                     if line is None:  # Sentinel for EOF
@@ -329,7 +328,6 @@ class AsyncPersistentProcessManager:
 
                 except asyncio.TimeoutError:
                     # Timeout - check if process is still alive
-                    self._log_debug("Timeout after %ss, checking process...", timeout)
 
                     # Check for worker task errors
                     if task_error := await self.check_error():
@@ -349,7 +347,6 @@ class AsyncPersistentProcessManager:
                             stderr=stderr_output,
                         )
                     # Continue waiting if process is still running
-                    self._log_debug("Process still alive, continuing to wait...")
                     continue
 
         except GeneratorExit:
@@ -370,7 +367,9 @@ class AsyncPersistentProcessManager:
         control_request = {
             "type": "control_request",
             "request_id": request_id,
-            "subtype": "interrupt",
+            "request": {
+                "subtype": "interrupt",
+            },
         }
 
         await self.write_request(control_request)

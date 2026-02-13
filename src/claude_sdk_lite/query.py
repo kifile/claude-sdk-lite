@@ -9,6 +9,7 @@ using subprocess to call the user's installed claudecode CLI.
 
 import json
 import logging
+import os
 from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator
 
 from claude_sdk_lite.exceptions import (
@@ -23,6 +24,9 @@ from claude_sdk_lite.options import ClaudeOptions
 from claude_sdk_lite.types import AssistantMessage, Message, ResultMessage, TextBlock
 
 logger = logging.getLogger(__name__)
+
+# Debug mode flag - check once at module load time for efficiency
+_DEBUG = os.environ.get("CLAUDE_SDK_DEBUG", "false").lower() == "true"
 
 
 def _parse_lines_to_messages(lines: Iterator[bytes]) -> Iterator[Message]:
@@ -42,6 +46,8 @@ def _parse_lines_to_messages(lines: Iterator[bytes]) -> Iterator[Message]:
         try:
             # Parse JSON line
             data = json.loads(line_str)
+            if _DEBUG:
+                logger.debug("Parsed JSON data: %s", data)
             message = parse_message(data)
 
             # Yield the message
@@ -78,6 +84,8 @@ async def _async_parse_lines_to_messages(lines: AsyncIterator[bytes]) -> AsyncIt
         try:
             # Parse JSON line
             data = json.loads(line_str)
+            if _DEBUG:
+                logger.debug("Parsed JSON data: %s", data)
             message = parse_message(data)
 
             # Yield the message
