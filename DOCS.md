@@ -12,6 +12,7 @@ Complete API reference, usage examples, and migration guide.
 - [Message Types](#message-types)
 - [Examples](#examples)
 - [Migration from Official SDK](#migration-from-official-sdk)
+- [Changelog](#changelog)
 
 ## Quick Start
 
@@ -447,3 +448,47 @@ for message in query(prompt="Hello", options=options):
 ```
 
 **Key difference:** Official SDK only supports async API, while claude-sdk-lite supports both sync and async APIs.
+
+## Changelog
+
+### [0.3.0] - 2026-02-13
+
+**Enhanced Message Parsing**
+- Improved robustness with `UnknownMessage` fallback for forward compatibility
+- `parse_message()` no longer raises exceptions - returns `UnknownMessage` for any parsing failures
+- Added `ControlResponseMessage` type for control request acknowledgments
+
+**Better User Message Handling**
+- Proper display of user input when `replay_user_messages` is enabled
+- Added `InterruptBlock` content type for interrupt signal display
+- Fixed message type handling with proper if-elif chains in chat examples
+
+**Async Interrupt Handling**
+- Improved `CancelledError` propagation in async client
+- Better async interrupt handling with proper cancellation support
+
+**API Improvements**
+- Moved `build_subprocess_kwargs()` from `_BaseClient` to `ClaudeOptions` for better encapsulation
+- Enhanced debug logging with more detailed message information
+
+### [0.2.1] - 2025-02-10
+
+**Echo Mode**
+- New `echo_mode` option to echo user input and interrupt signals through message stream
+
+### [0.2.0] - 2025-02-10
+
+**Session-Based Clients**
+- `ClaudeClient` and `AsyncClaudeClient` for multi-turn conversations
+
+**Event-Driven Architecture**
+- Real-time message handling via `MessageEventListener`
+- `AsyncMessageEventListener` for async/await patterns
+
+**Default Handlers**
+- Built-in message buffering and synchronization helpers
+- `DefaultMessageHandler` and `AsyncDefaultMessageHandler`
+
+### [0.1.0] - Initial Release
+
+- Basic query functions with full Claude Code CLI parameter support

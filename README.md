@@ -54,6 +54,14 @@ Full API documentation, examples, and migration guides: → [**DOCS.md**](DOCS.m
 
 ## Changelog
 
+### [0.3.0] - 2026-02-13
+- **Enhanced Message Parsing** - Improved robustness with `UnknownMessage` fallback for forward compatibility
+- **Better User Message Handling** - Proper display of user input when `replay_user_messages` is enabled
+- **Interrupt Signal Support** - Add `InterruptBlock` content type for interrupt signal display
+- **Async Interrupt Handling** - Improved `CancelledError` propagation in async client
+- **Extended Type Support** - Add `ControlResponseMessage` for control request acknowledgments
+- **API Improvements** - Moved `build_subprocess_kwargs()` to `ClaudeOptions` for better encapsulation
+
 ### [0.2.1] - 2025-02-10
 - **Echo Mode** - New `echo_mode` option to echo user input and interrupt signals through message stream
 

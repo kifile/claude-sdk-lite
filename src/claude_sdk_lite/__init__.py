@@ -31,7 +31,7 @@ Example (async):
     ```
 """
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 
 from .async_persistent_executor import AsyncPersistentProcessManager
 from .client import AsyncClaudeClient, ClaudeClient
