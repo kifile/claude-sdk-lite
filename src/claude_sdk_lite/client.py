@@ -247,6 +247,7 @@ class ClaudeClient(_BaseClient):
             interrupt_echo = UserMessage(content=[InterruptBlock()])
             self._safe_callback(lambda: self._handler.on_message(interrupt_echo))
 
+        # Send interrupt signal
         self._manager.write_interrupt()
 
     @property
@@ -539,6 +540,7 @@ class AsyncClaudeClient(_BaseClient):
             else:
                 self._handler.on_message(interrupt_echo)
 
+        # Send interrupt signal
         await self._manager.write_interrupt()
 
     async def get_stderr(self) -> list[str]:

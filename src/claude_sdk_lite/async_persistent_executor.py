@@ -502,6 +502,11 @@ class AsyncPersistentProcessManager:
                     await self._capture_exception(e)
                     break
 
+        except asyncio.CancelledError:
+            # Task was cancelled - this is expected during interrupt
+            self._log_debug("[STDIN] Writer task cancelled")
+            raise  # Re-raise to properly handle cancellation
+
         except Exception as e:
             # Capture unexpected exceptions
             await self._capture_exception(e)
@@ -535,6 +540,11 @@ class AsyncPersistentProcessManager:
                             )
                         except asyncio.TimeoutError:
                             self._log_debug("[STDOUT] Queue full, dropping line #%d", line_count)
+
+                except asyncio.CancelledError:
+                    # Task was cancelled - this is expected during interrupt
+                    self._log_debug("[STDOUT] Task cancelled during readline")
+                    raise  # Re-raise to properly handle cancellation
 
                 except Exception as e:
                     self._log_debug("[STDOUT] Exception: %s", e)
@@ -574,6 +584,11 @@ class AsyncPersistentProcessManager:
                                 # Keep buffer manageable
                                 if len(self._stderr_buffer) > MAX_STDERR_LINES:
                                     self._stderr_buffer = self._stderr_buffer[-MAX_STDERR_LINES:]
+
+                except asyncio.CancelledError:
+                    # Task was cancelled - this is expected during interrupt
+                    self._log_debug("[STDERR] Reader task cancelled")
+                    raise  # Re-raise to properly handle cancellation
 
                 except Exception as e:
                     await self._capture_exception(e)

@@ -115,11 +115,14 @@ class SimpleAsyncChat:
         self.last_interrupt_time = None
         self.is_thinking = False
 
-    def handle_interrupt(self):
+    async def handle_interrupt(self):
         """Handle Ctrl+C with double-interrupt detection.
 
+        This is an async method that may call client.interrupt().
+
         Returns:
-            True if interrupt was handled, False if it's a double-interrupt (exit).
+            bool: True if session should continue (single-interrupt),
+                  False if session should exit (double-interrupt)
         """
         current_time = time.time()
 
@@ -135,9 +138,16 @@ class SimpleAsyncChat:
         # Update last interrupt time
         self.last_interrupt_time = current_time
 
-        # First interrupt
+        # First interrupt - try to interrupt current operation
         if self.is_thinking:
             print("\n\n[Interrupting...]")
+            try:
+                if self.client.is_connected:
+                    await self.client.interrupt()
+            except ConnectionError as e:
+                print(f"[Connection lost during interrupt: {e}]")
+            except Exception as e:
+                print(f"[Failed to interrupt: {e}]")
         else:
             print("\n\n[Use 'quit' or 'exit' to end the session]")
 
@@ -163,6 +173,18 @@ class SimpleAsyncChat:
 
             if DEBUG:
                 print(f"\n[DEBUG] Completed: {len(self.handler.messages)} messages", flush=True)
+
+        except asyncio.CancelledError:
+            # User pressed Ctrl+C during query processing
+            # This could happen if the task was cancelled while waiting
+            # Ensure the subprocess is interrupted
+            print("\n[Interrupted]")
+            try:
+                if self.client.is_connected:
+                    await self.client.interrupt()
+            except (ConnectionError, Exception):
+                # Best effort - already cancelled, don't worry about errors
+                pass
 
         finally:
             self.is_thinking = False
@@ -208,7 +230,7 @@ class SimpleAsyncChat:
 
                     except KeyboardInterrupt:
                         # User pressed Ctrl+C - handle with double-interrupt detection
-                        if not self.handle_interrupt():
+                        if not await self.handle_interrupt():
                             return  # Exit on double-interrupt
                         continue
 
